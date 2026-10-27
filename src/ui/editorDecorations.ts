@@ -31,8 +31,22 @@ export class EditorDecorations implements vscode.Disposable {
   clearInline(doc: vscode.TextDocument, fromLine = 0, toLine = Number.MAX_SAFE_INTEGER): void {
     const m = this.inline.get(doc.uri.toString());
     if (!m) return;
-    for (const l of [...m.keys()]) if (l >= fromLine && l <= toLine) m.delete(l);
-    this.render(doc);
+    let changed = false;
+    for (const l of [...m.keys()]) {
+      if (l >= fromLine && l <= toLine) changed = m.delete(l) || changed;
+    }
+    // Called on every keystroke: only touch the editor when something went away.
+    if (changed) this.render(doc);
+  }
+
+  notes(doc: vscode.TextDocument): Map<number, string> {
+    return new Map(this.inline.get(doc.uri.toString()) ?? []);
+  }
+
+  /** "PyLive: Clear Inline Results": remove every note in every editor. */
+  clearAllInline(): void {
+    this.inline.clear();
+    for (const editor of vscode.window.visibleTextEditors) editor.setDecorations(this.resultType, []);
   }
 
   private render(doc: vscode.TextDocument): void {

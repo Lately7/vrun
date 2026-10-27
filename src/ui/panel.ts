@@ -59,8 +59,14 @@ export class InspectorPanel implements vscode.Disposable {
         this.ready = false;
         this.queue = [];
       }, undefined, this.disposables);
-    } else {
-      this.panel.reveal(undefined, preserveFocus);
+    } else if (!this.panel.visible) {
+      // Revealing in the editor's own group would cover the file being edited:
+      // move the panel beside it instead.
+      const editorColumn = vscode.window.activeTextEditor?.viewColumn;
+      const sameGroup = editorColumn !== undefined && editorColumn === this.panel.viewColumn;
+      this.panel.reveal(sameGroup ? vscode.ViewColumn.Beside : undefined, preserveFocus);
+    } else if (!preserveFocus) {
+      this.panel.reveal(undefined, false);
     }
     if (tab) this.post({ type: 'showTab', tab });
   }

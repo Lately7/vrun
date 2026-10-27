@@ -123,6 +123,34 @@ function tests(): void {
     await doc.save();
   });
 
+  test('inline results are quiet and disappear when their line is edited', async () => {
+    const file = path.join(ws, 'inline_demo.py');
+    fs.writeFileSync(file, 'x = 1\nprint(x)\nx + 1\n');
+    const doc = await vscode.workspace.openTextDocument(file);
+    // Same group as the inspector on purpose: running must not cover the file.
+    const editor = await vscode.window.showTextDocument(doc);
+    await vscode.commands.executeCommand('pylive.runFile');
+    assert.ok(vscode.window.visibleTextEditors.some((ed) => ed.document === doc), 'the edited file stays visible');
+    // Only the value of the final expression (on its own line), no "✓ [n] ms" noise.
+    assert.deepEqual([...c.inlineNotes(doc)], [[2, '2']]);
+    // Editing the line removes its note at once.
+    await editor.edit((e) => e.insert(new vscode.Position(2, 5), '0'));
+    assert.equal(c.inlineNotes(doc).size, 0);
+    // Live Mode with a half-typed statement says nothing in the editor.
+    await vscode.commands.executeCommand('pylive.toggleLiveMode');
+    await editor.edit((e) => e.replace(new vscode.Range(0, 0, doc.lineCount, 0), 'for i in range(3)\n'));
+    await sleep(2500); // debounce + live run
+    assert.equal(c.inlineNotes(doc).size, 0);
+    await vscode.commands.executeCommand('pylive.toggleLiveMode');
+    // And the clear command removes everything.
+    await editor.edit((e) => e.replace(new vscode.Range(0, 0, doc.lineCount, 0), '40 + 2\n'));
+    await vscode.commands.executeCommand('pylive.runFile');
+    assert.equal(c.inlineNotes(doc).size, 1);
+    await vscode.commands.executeCommand('pylive.clearInlineResults');
+    assert.equal(c.inlineNotes(doc).size, 0);
+    await doc.save();
+  });
+
   test('extension host stays responsive during a long kernel computation', async () => {
     let maxLag = 0;
     let last = Date.now();

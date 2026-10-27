@@ -94,6 +94,7 @@ export class PyLiveController implements vscode.Disposable {
       vscode.workspace.onDidCloseTextDocument((d) => this.disableLive(d.uri.toString())),
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration('pylive.features')) this.postFeatures();
+        if (e.affectsConfiguration('pylive.inlineResults') && cfg().get<string>('inlineResults') === 'off') this.clearInlineResults();
       }),
     );
   }
@@ -324,7 +325,7 @@ export class PyLiveController implements vscode.Disposable {
     const stale = liveCheck !== undefined && !liveCheck();
     if (!stale) {
       this.panel.post({ type: 'execEnd', execId, result });
-      this.applyResultToEditor(doc, result, resultLine);
+      this.applyResultToEditor(doc, result, lineOffset, resultLine);
     } else {
       // Still close the block in the UI, or it would say "live…" forever.
       this.panel.post({ type: 'execEnd', execId, superseded: true });
@@ -343,18 +344,37 @@ export class PyLiveController implements vscode.Disposable {
     return pick === 'Run Again';
   }
 
-  private applyResultToEditor(doc: vscode.TextDocument, result: ExecuteResult, line: number): void {
+  /**
+   * Inline results stay quiet: an expression's value or a real error, at the
+   * end of the code that ran. Older notes in that range are replaced, and a
+   * note disappears as soon as its line is edited (see onDocumentChanged).
+   */
+  private applyResultToEditor(doc: vscode.TextDocument, result: ExecuteResult, startLine: number, line: number): void {
+    const enabled = cfg().get<string>('inlineResults', 'values') !== 'off';
+    this.decorations.clearInline(doc, startLine, line);
+    // Attach to the last line that has code, not to trailing blank lines.
+    while (line > startLine && line < doc.lineCount && doc.lineAt(line).isEmptyOrWhitespace) line--;
     if (result.status === 'error' && result.error) {
       this.decorations.showError(doc, result.error);
-      this.decorations.setInline(doc, line, `${result.error.ename}: ${result.error.evalue}`);
+      if (enabled) this.decorations.setInline(doc, line, `${result.error.ename}: ${result.error.evalue}`);
     } else if (result.status === 'blocked') {
+      // A syntax error while typing is expected mid-edit: say nothing.
+      if (result.analysis?.syntaxError) return;
       const f = result.analysis?.findings[0];
-      this.decorations.setInline(doc, line, `live run skipped — ${f ? `line ${f.line}: ${f.message}` : 'unsafe code'}`);
+      if (enabled) this.decorations.setInline(doc, line, `not re-run live — ${f ? f.message : 'see Output'}`);
     } else {
       this.decorations.clearErrors(doc);
-      if (result.value) this.decorations.setInline(doc, line, result.value.repr);
-      else this.decorations.setInline(doc, line, `✓ [${result.executionCount}] ${result.elapsedMs ?? 0} ms`);
+      if (enabled && result.value) this.decorations.setInline(doc, line, result.value.repr);
     }
+  }
+
+  clearInlineResults(): void {
+    this.decorations.clearAllInline();
+  }
+
+  /** Lines (0-based) that currently show an inline note — for tests. */
+  inlineNotes(doc: vscode.TextDocument): Map<number, string> {
+    return this.decorations.notes(doc);
   }
 
   // ------------------------------------------------------------ live mode
@@ -460,6 +480,14 @@ export class PyLiveController implements vscode.Disposable {
     if (e.contentChanges.length === 0) return;
     const doc = e.document;
     const key = doc.uri.toString();
+    // Inline notes are keyed by line number: an edit invalidates the notes of
+    // the lines it touches, and adding/removing lines shifts every later note.
+    for (const ch of e.contentChanges) {
+      const removed = ch.range.end.line - ch.range.start.line;
+      const added = (ch.text.match(/\n/g) ?? []).length;
+      if (removed !== added) this.decorations.clearInline(doc, ch.range.start.line);
+      else this.decorations.clearInline(doc, ch.range.start.line, ch.range.end.line);
+    }
     if (this.liveDocs.has(key)) {
       const sk = `exec:${key}`;
       this.scheduler.schedule(sk, (gen) => this.runLive(doc, sk, gen));
