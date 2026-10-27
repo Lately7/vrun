@@ -1,0 +1,12 @@
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!out/extension.js
+!media/webview.js
+!media/webview.css
+!media/icon.png
+!python/launcher.py
+!python/pylive_kernel/*.py
+!examples/*.py

@@ -11,6 +11,7 @@
   },
   "categories": ["Data Science", "Visualization", "Education", "Other"],
   "keywords": ["python", "pandas", "dataframe", "variable explorer", "algorithm visualizer"],
+  "icon": "media/icon.png",
   "main": "./out/extension.js",
   "activationEvents": ["onLanguage:python"],
   "capabilities": {
@@ -104,7 +105,7 @@
     "test": "npm run build && node esbuild.mjs --tests && node --test --test-concurrency=1 \"out/test/unit/*.test.js\"",
     "test:py": "node scripts/run-pytest.mjs",
     "test:vscode": "npm run build && node esbuild.mjs --tests && node out/test/integration/runTest.js",
-    "package": "npm run build -- --production && vsce package --no-dependencies",
+    "package": "npm run build -- --production && vsce package --no-dependencies --allow-missing-repository",
     "vscode:prepublish": "node esbuild.mjs --production"
   },
   "devDependencies": {

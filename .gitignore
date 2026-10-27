@@ -11,3 +11,4 @@ benchmarks/data/
 media/*.map
 dev/
 .claude/
+.venv312/
