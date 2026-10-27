@@ -124,6 +124,10 @@ Design and measurements are documented in the repository: `ARCHITECTURE.md`,
   `input()` is not supported.
 * Sort/filter caches live for one execution count only; a background thread
   that mutates a DataFrame between executions can make a page inconsistent.
+* Output printed by background threads is attributed to the run that started
+  the thread only until a newer run starts; after that (and for threads made
+  with `_thread` or thread pools reused across runs) it appears under
+  "Background output" — never under a wrong run.
 * No IPython magics (`%timeit`, `!pip`) — this is a plain Python kernel (see
   ADR-001).
 * DataFrame memory is reported shallow (`≥` for object/string columns).

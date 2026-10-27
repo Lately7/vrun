@@ -52,7 +52,7 @@ export class PyLiveController implements vscode.Disposable {
   private lastVariables: VariablesList | undefined;
   private varsRefreshing = false;
   private varsDirty = false;
-  private traceContext: TraceContext | undefined;
+  private readonly traceContexts = new Map<number, TraceContext>();
   private manualRunning = 0;
   /** Live runs postponed while a manual run was in flight (scheduler key -> doc). */
   private readonly deferredLive = new Map<string, vscode.TextDocument>();
@@ -165,7 +165,7 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   async restartKernel(): Promise<void> {
-    this.scheduler.cancelAll();
+    this.cancelLiveWork();
     this.panel.post({ type: 'session', session: null, restarting: true });
     try {
       const ready = await this.kernel.restart(await this.launchOptions());
@@ -177,8 +177,14 @@ export class PyLiveController implements vscode.Disposable {
     }
   }
 
-  async stopKernel(): Promise<void> {
+  /** Drop scheduled and deferred live work (stop, restart, dispose). */
+  private cancelLiveWork(): void {
     this.scheduler.cancelAll();
+    this.deferredLive.clear();
+  }
+
+  async stopKernel(): Promise<void> {
+    this.cancelLiveWork();
     await this.kernel.stop();
     this.panel.post({ type: 'session', session: null });
   }
@@ -251,6 +257,8 @@ export class PyLiveController implements vscode.Disposable {
     liveCheck?: () => boolean,
   ): Promise<ExecuteResult | undefined> {
     if (!code.trim()) return undefined;
+    // Live work never starts a kernel: after Stop it must stay stopped.
+    if (mode === 'live' && !this.kernel.isRunning) return undefined;
     try {
       await this.ensureKernel();
     } catch {
@@ -367,7 +375,7 @@ export class PyLiveController implements vscode.Disposable {
     const pending = [...this.deferredLive];
     this.deferredLive.clear();
     for (const [key, doc] of pending) {
-      if (this.liveDocs.has(doc.uri.toString())) this.scheduler.schedule(key, (g) => this.runLive(doc, key, g));
+      if (!doc.isClosed && this.liveDocs.has(doc.uri.toString())) this.scheduler.schedule(key, (g) => this.runLive(doc, key, g));
     }
   }
 
@@ -386,6 +394,7 @@ export class PyLiveController implements vscode.Disposable {
     this.liveVizDocs.delete(key);
     this.scheduler.cancel(`exec:${key}`);
     this.scheduler.cancel(`trace:${key}`);
+    this.deferredLive.delete(`exec:${key}`); // a closed document must never run later
   }
 
   private onDocumentChanged(e: vscode.TextDocumentChangeEvent): void {
@@ -455,6 +464,7 @@ export class PyLiveController implements vscode.Disposable {
   private async traceDocument(doc: vscode.TextDocument, mode: Mode, isCurrent: (() => boolean) | undefined): Promise<void> {
     const scope = this.traceScope(doc);
     if (!scope.code.trim()) return;
+    if (mode === 'live' && !this.kernel.isRunning) return; // live work never starts a kernel
     try {
       await this.ensureKernel();
     } catch {
@@ -475,7 +485,10 @@ export class PyLiveController implements vscode.Disposable {
         this.panel.post({ type: 'traceSuperseded', execId });
         return;
       }
-      this.traceContext = { uri: doc.uri, lineOffset: scope.lineOffset };
+      // Keyed by execId: the webview may still be showing an older trace
+      // (it ignores results older than the newest one it started).
+      this.traceContexts.set(execId, { uri: doc.uri, lineOffset: scope.lineOffset });
+      for (const id of this.traceContexts.keys()) if (this.traceContexts.size > 20) this.traceContexts.delete(id);
       this.panel.post({ type: 'trace', execId, label: scope.label, mode, lineOffset: scope.lineOffset, result });
       if (result.error?.userFrame && result.error.userFrame.line > 0) {
         this.decorations.highlightTraceLine(doc.uri, result.error.userFrame.line - 1 + scope.lineOffset);
@@ -596,7 +609,10 @@ export class PyLiveController implements vscode.Disposable {
           timeoutMs: cfg().get<number>('inspect.timeoutMs', 20000),
         });
       case 'traceStep':
-        if (this.traceContext) this.decorations.highlightTraceLine(this.traceContext.uri, msg.line - 1 + this.traceContext.lineOffset);
+      {
+        const ctx = this.traceContexts.get(msg.execId);
+        if (ctx) this.decorations.highlightTraceLine(ctx.uri, msg.line - 1 + ctx.lineOffset);
+      }
         return;
       case 'copy':
         await vscode.env.clipboard.writeText(msg.text);
@@ -626,7 +642,7 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   dispose(): void {
-    this.scheduler.cancelAll();
+    this.cancelLiveWork();
     this.kernel.dispose();
     for (const d of this.disposables) d.dispose();
   }

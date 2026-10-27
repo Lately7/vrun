@@ -30,6 +30,7 @@ export class OutputView {
   readonly el = h('div', { class: 'output' });
   private list = h('div', { class: 'runs', 'aria-live': 'polite' });
   private blocks = new Map<number, Block>();
+  private superseded = new Set<number>();
   private errorCount = 0;
   onError: (count: number) => void = () => undefined;
 
@@ -71,6 +72,7 @@ export class OutputView {
   }
 
   stream(execId: number | null | undefined, name: string, text: string): void {
+    if (execId !== null && execId !== undefined && this.superseded.has(execId)) return;
     // Output the kernel could not attribute (background threads, evicted
     // runs) gets its own block instead of being mixed into the latest run.
     const target = (execId !== null && execId !== undefined ? this.blocks.get(execId) : undefined) ?? this.backgroundBlock();
@@ -111,9 +113,12 @@ export class OutputView {
     if (!b) return;
     b.done = true;
     if (superseded) {
-      // A newer live run replaced this one; its result is intentionally dropped.
+      // A newer live run replaced this one; its result is intentionally
+      // dropped, and so is any late output still tagged with its id.
       b.el.remove();
       this.blocks.delete(execId);
+      this.superseded.add(execId);
+      if (this.superseded.size > 500) this.superseded.delete(this.superseded.values().next().value!);
       return;
     }
     clear(b.status);

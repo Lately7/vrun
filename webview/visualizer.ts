@@ -44,6 +44,8 @@ export class Visualizer {
   private busy = '';
   private liveViz = false;
   private latestExecId = 0;
+  /** execId of the trace on screen; step highlights are resolved against it. */
+  private traceExecId = 0;
 
   constructor() {
     this.render();
@@ -89,6 +91,7 @@ export class Visualizer {
 
   setTrace(execId: number, result: TraceResult, label: string, mode: string, lineOffset: number): void {
     if (execId < this.latestExecId) return; // an older trace finished after a newer one started
+    this.traceExecId = execId;
     this.busy = '';
     this.snapshot = undefined;
     const keep = mode === 'live' && this.trace !== undefined;
@@ -124,7 +127,7 @@ export class Visualizer {
 
   private notifyLine(): void {
     const step = this.trace?.steps[this.index];
-    if (step) send({ type: 'traceStep', line: step.line });
+    if (step) send({ type: 'traceStep', execId: this.traceExecId, line: step.line });
   }
 
   private togglePlay(): void {

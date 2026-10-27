@@ -10,8 +10,10 @@ Threads:
 from __future__ import annotations
 
 import _thread
+import codecs
 import collections
 import hashlib
+import io
 import json
 import os
 import queue
@@ -20,6 +22,7 @@ import signal
 import sys
 import threading
 import time
+import weakref
 from typing import Any, BinaryIO, Callable
 
 from . import dataframe, executor, inspector, safety, tracer
@@ -106,6 +109,7 @@ class CaptureStream:
         self._last = time.monotonic()
         self._lock = threading.Lock()
         self._exec_id: Any = None
+        self._binary = _BinaryWriter(self)
 
     def write(self, s: str) -> int:
         if not isinstance(s, str):
@@ -172,12 +176,62 @@ class CaptureStream:
     def isatty(self) -> bool:
         return False
 
+    # -- TextIOWrapper compatibility: these streams also serve as
+    # sys.__stdout__/__stderr__, which libraries treat as real text files.
+    closed = False
+    line_buffering = True
+    newlines = None
+
+    @property
+    def buffer(self) -> _BinaryWriter:
+        return self._binary
+
+    def reconfigure(self, **_: Any) -> None:
+        """Accepted and ignored: the stream is always UTF-8 and line-flushed."""
+
     def fileno(self) -> int:
-        raise OSError("PyLive capture stream has no file descriptor")
+        # UnsupportedOperation (an OSError and ValueError) is what io raises
+        # for streams without a descriptor; faulthandler and subprocess
+        # handle it.
+        raise io.UnsupportedOperation("PyLive capture stream has no file descriptor")
 
     def writelines(self, lines: Any) -> None:
         for line in lines:
             self.write(line)
+
+
+class _BinaryWriter:
+    """`.buffer` of a CaptureStream: UTF-8 bytes are decoded into the text stream."""
+
+    def __init__(self, text: CaptureStream) -> None:
+        self._text = text
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._lock = threading.Lock()
+
+    def write(self, data: Any) -> int:
+        b = bytes(memoryview(data))
+        with self._lock:
+            s = self._decoder.decode(b)
+        if s:
+            self._text.write(s)
+        return len(b)
+
+    def flush(self) -> None:
+        self._text.flush()
+
+    closed = False
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def isatty(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        raise io.UnsupportedOperation("PyLive capture stream has no file descriptor")
 
 
 class _NoInput:
@@ -219,6 +273,9 @@ class Worker:
         self.interrupt_reason: str | None = None
         self.current_exec_id: Any = None
         self.exec_seq = 0  # bumped by every execute/trace; see exec_id_for_current_thread
+        # thread -> (exec_seq at start, owning exec id)
+        self.thread_owners: weakref.WeakKeyDictionary[threading.Thread, tuple[int, Any]] = \
+            weakref.WeakKeyDictionary()
         self.execution_count = 0
         self.output_bytes = 0
         self.output_truncated = False
@@ -245,9 +302,18 @@ class Worker:
         def start(thread: threading.Thread) -> None:
             # Inherit the *starting thread's* owner: a stale background thread
             # that spawns a child must not hand it the newest execution's id.
-            owner = worker.exec_id_for_current_thread()
-            thread._pylive_exec = (worker.exec_seq, owner)  # type: ignore[attr-defined]
-            original_start(thread)
+            # Ownership lives outside the Thread object (no attribute clashes
+            # with subclasses) and is only recorded for a first, successful
+            # start: a second start() raises and must not re-label the thread.
+            first = thread.ident is None and thread not in worker.thread_owners
+            if first:
+                worker.thread_owners[thread] = (worker.exec_seq, worker.exec_id_for_current_thread())
+            try:
+                original_start(thread)
+            except BaseException:
+                if first:
+                    worker.thread_owners.pop(thread, None)
+                raise
 
         threading.Thread.start = start  # type: ignore[method-assign]
         sys.stdin = _NoInput()  # type: ignore[assignment]
@@ -268,7 +334,7 @@ class Worker:
         t = threading.current_thread()
         if t is threading.main_thread():
             return self.current_exec_id
-        origin = getattr(t, "_pylive_exec", None)
+        origin = self.thread_owners.get(t)
         if origin is not None and origin[0] == self.exec_seq:
             return origin[1]
         return None

@@ -26,6 +26,29 @@
   Python), VS Code integration tests in an Extension Development Host.
 * Benchmarks script (implemented by Codex) and measured results.
 
+### Fixed in the Codex review/attack rounds
+* Run Selection executes exactly the selected text.
+* Output budget in UTF-8 bytes with chunked stream events; lone surrogates no
+  longer drop a message; aggregate figure budget.
+* Inspection never runs user code: no `__dict__`/`__class__`/`__sizeof__`
+  properties, no metaclass properties, no overridden `__int__`/`isoformat`,
+  base slots read through member descriptors.
+* Exact (Decimal-based) integer filters, strict boolean filters.
+* 0-d, object-dtype and (nested) structured NumPy arrays are inspectable.
+* Background-thread output is never attributed to the wrong run, is flushed
+  even when no run follows, and is shown in a "Background output" block.
+* `sys.stdout = sys.__stdout__` restores capture; trace no longer swaps
+  `sys.modules['__main__']` or captures other threads' output.
+* POSIX process-group kill; stale `ready`/`info` handling; ready-event
+  validation.
+* Live Mode: no overlapping runs after cancel, edits during manual runs are
+  deferred (not dropped), per-document Live state, superseded runs close their
+  UI blocks, live block cleanup per document.
+* Webview: stale summary/column/trace responses ignored, output trimming keeps
+  the newest text, evicted blocks no longer leak, selection reset on paging,
+  validated persisted state, playback stops on failure.
+* `dedent` uses the common whitespace prefix.
+
 ### Fixed during development
 * pandas 3 reports the default string dtype as `str`; memory lower-bound flag
   and filters now handle it; categorical columns accept text filters.

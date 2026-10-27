@@ -28,22 +28,33 @@ _TYPE_MODULE = type.__dict__["__module__"]
 _TYPE_QUALNAME = type.__dict__["__qualname__"]
 
 
+def _exact_str(s: object) -> str | None:
+    # A str *subclass* may override startswith/__eq__/__format__; copying it
+    # through str.__str__ yields a plain str without running any override.
+    if type(s) is str:
+        return s  # type: ignore[return-value]
+    if issubclass(type(s), str):
+        return str.__str__(s)  # type: ignore[arg-type]
+    return None
+
+
 def type_module(t: type) -> str:
+    """Module name of a type ("" when unknown)."""
     try:
         m = _TYPE_MODULE.__get__(t, type)
     except AttributeError:
-        return "?"
-    return m if isinstance(m, str) else "?"
+        return ""
+    return _exact_str(m) or ""
 
 
 def type_qualname(t: type) -> str:
-    return _TYPE_QUALNAME.__get__(t, type)
+    return _exact_str(_TYPE_QUALNAME.__get__(t, type)) or "?"
 
 
 def type_name(obj: object) -> str:
     t = type(obj)
     module = type_module(t)
-    if module in ("builtins", "__main__"):
+    if module in ("builtins", "__main__", ""):
         return type_qualname(t)
     return f"{module}.{type_qualname(t)}"
 

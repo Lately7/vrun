@@ -48,6 +48,61 @@ reasoning. Nothing is accepted without a passing test.
 | thread-pool reuse mislabels output | agree that a *wrong* label is a bug | rule: background output keeps its exec id only while no newer execution started, otherwise `None` ("never wrong") |
 | `_thread.start_new_thread` / subclass overriding `start` give `None` | **disagree** — exact attribution would need patching private stdlib internals that changed across 3.12–3.15; `None` is shown as "Background output" | documented limitation |
 
+## Round 2c — Codex's answer to the rebuttal
+
+Codex **agreed** on the stdout semantics, on heap refs for object arrays
+(rewrote its test to resolve refs) and on the "never a wrong label" rule
+(updated its thread tests to expect `None`). It then broke the rule once
+more: a *stale* background thread starting a child after a newer execution
+handed the child the newest exec id — fixed by inheriting the starting
+thread's owner. It also found two remaining user-code paths: `isinstance`
+fallbacks to `__class__` in scalar encoding (and overridden `__int__`,
+`isoformat`, …) and `t.__module__` in result description — both fixed.
+Final state: 115 Python tests, 0 failures, no open disagreements.
+
+## Round 3 — adversarial TypeScript tests (Codex wrote `test/unit/codex.test.ts`)
+
+Codex's sandbox blocks process spawning, so Claude ran its tests on the real
+machine: 46 tests, 6 failures — exactly the ones Codex predicted.
+
+| Finding | Verdict | Resolution |
+|---|---|---|
+| `info` survives kernel exit | agree | cleared in `onExit` |
+| malformed `ready` event accepted | agree | `isReadyEvent` validates every field |
+| cancel during an in-flight live run → two overlapping runs | agree | cancelled running slots stay registered until settled |
+| `# %%%` treated as a marker | **disagree** (Spyder outline levels, VS Code prefix matching). Codex conceded | unchanged |
+| dedent cuts mixed tab/space indentation | agree | common whitespace *prefix* |
+| NUL accepted in copy text / filter values | **disagree** (data only, cells may contain NUL). Codex conceded | unchanged |
+| review: live edit dropped during manual run | agree | deferred, released when manual runs finish |
+| review: Live button shows another file's state | agree | `liveState` on ready and on editor change |
+| review: persisted tab not validated | agree | validated |
+| review: live cleanup removes other files' blocks | agree | per document, finished blocks only |
+| review: "Open result" shown for Series | **disagree** (viewer supports Series). Codex conceded | label clarified |
+| review: selection survives paging | agree | reset on every page load |
+| review: older trace overrides newer | agree | results older than the latest started trace ignored |
+
+## Round 3b — Codex attacked the round-3 fixes
+
+All five findings accepted and fixed: PID must be a positive safe integer;
+dedent normalises whitespace-only lines; live blocks keyed by document URI,
+not basename; deferred live runs are event-driven (no retry loop if a manual
+run hangs); non-Python editors show Live as off. Final state: 53 TypeScript
+unit tests, 0 failures.
+
+## Round 4 — cumulative regression review (read-only)
+
+| # | Finding | Verdict | Resolution |
+|---|---|---|---|
+| 1 | `"1e999999999"` integer filter builds a huge int in C code | agree | range check against `np.iinfo` before any int conversion (`test_huge_exponent_filter_answers_fast`) |
+| 2 | deferred live work restarts a stopped kernel | agree | deferred work cleared on stop/restart/dispose; live runs and traces never start a kernel |
+| 3 | `sys.__stdout__` lacks `.buffer`/`closed`/`reconfigure` | agree | capture streams gained a UTF-8 `.buffer`, `closed`, `reconfigure`, `fileno` → `io.UnsupportedOperation` |
+| 4 | hostile `str` subclass as `__module__` | agree | names copied through `str.__str__` (no overrides run) |
+| 5 | second `start()` re-labels a running thread | agree | ownership in a `WeakKeyDictionary`, recorded only for a first successful start |
+| 6 | traced classes are not picklable | **disagree** — the fix (a non-`__main__` `__name__`) would stop `if __name__ == "__main__":` blocks from running in traced algorithm code, which learners use constantly | documented limitation |
+| 7 | a closed document can run from the deferred queue | agree | removed on close; `isClosed` checked |
+| 8 | step highlights use the newest trace's document even when the webview shows an older trace | agree | trace contexts keyed by `execId`; `traceStep` carries it |
+| 9 | late output of a superseded run lands in "Background output" | agree | superseded ids are tombstoned and their late output dropped |
+
 While implementing the rule, a new bug surfaced: output printed by a
 background thread after its run ended stayed buffered until the next run —
 fixed with a 100 ms flush loop (`test_background_output_while_its_run_is_latest_keeps_exec_id`).

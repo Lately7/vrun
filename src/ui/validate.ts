@@ -52,7 +52,7 @@ export type WebviewMessage =
     }
   | { type: 'dfSummary'; requestId: number; name: string; revision: number }
   | { type: 'dfColumn'; requestId: number; name: string; revision: number; column: number }
-  | { type: 'traceStep'; line: number }
+  | { type: 'traceStep'; execId: number; line: number }
   | { type: 'copy'; text: string };
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,199}$/;
@@ -134,7 +134,9 @@ export function validateWebviewMessage(raw: unknown): WebviewMessage | undefined
         ? { type: 'dfColumn', requestId: m.requestId, name: m.name, revision: m.revision, column: m.column }
         : undefined;
     case 'traceStep':
-      return isInt(m.line, 1, 10_000_000) ? { type: 'traceStep', line: m.line } : undefined;
+      return isInt(m.line, 1, 10_000_000) && isInt(m.execId, 0, Number.MAX_SAFE_INTEGER)
+        ? { type: 'traceStep', execId: m.execId, line: m.line }
+        : undefined;
     case 'copy':
       return typeof m.text === 'string' && m.text.length <= 1_000_000 ? { type: 'copy', text: m.text } : undefined;
     default:

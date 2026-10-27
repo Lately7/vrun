@@ -29,7 +29,7 @@ Status legend: ✅ done (with evidence) · ⏳ open
 | 8 | UI responsive during execution | integration test: max event-loop lag 16 ms during 3 s computation |
 | 9 | Interrupt / restart | `test_interrupt_*`, integration interrupt + restart tests, 16 ms interrupt latency |
 | 10 | Stale responses dropped | LiveScheduler tests; `stale_handle` / `stale_revision` tests; webview request sequence numbers |
-| 11 | Automated tests | pytest, node:test, VS Code integration (see CHANGELOG) |
+| 11 | Automated tests | 115 pytest (incl. 37 written by Codex), 53 node:test (incl. 31 by Codex), 8 VS Code integration — all passing |
 | 12 | Large synthetic dataset | 500 k and 1 M rows benchmarked; 200 k-row pytest fixture |
 | 13 | VSIX generated | `pylive-inspector-0.1.0.vsix` (21 files, 66 KB), installed into a temp extensions dir |
 | 14 | Installation documented | README "Install (local VSIX)" |
@@ -41,7 +41,14 @@ Status legend: ✅ done (with evidence) · ⏳ open
 |---|---|---|
 | Architecture risk review | `codex exec --sandbox read-only` | 11 risks (`docs/reviews/codex-01-architecture-risks.md`). Integrated: single writer thread, one interrupt per task + drain, `BaseException` trace limit, `msvcrt.setmode` binary pipes, revision in handles, figure caps, Workspace Trust requirement. Deferred: delta-encoded traces, trace subprocess isolation. |
 | Benchmark script | `codex exec --sandbox workspace-write`, owned `benchmarks/` only | `benchmarks/run_benchmarks.py` (reuses the test KernelProc, cold/warm, RSS, message sizes, interrupt). Reviewed by Claude; ran unchanged for the full 1 k–1 M run. |
-| Final code review | `codex exec --sandbox read-only` | see `docs/reviews/codex-02-final-review.md` and the resolution table there |
+| Round 1: final code review | `codex exec --sandbox read-only` | 12 findings; 11 fixed, 1 partially (trace isolation via per-thread stdout instead of a subprocess) |
+| Round 2: adversarial kernel tests | `workspace-write`, owns `python/tests/test_codex_adversarial.py` | 25 tests, 6 failures → 5 fixed, 1 rebutted (stdout semantics); the rebuttal exposed 2 real bugs |
+| Round 2b/2c: Codex attacks the fixes (same session via `codex exec resume`) | same | 8 + 3 new failures; all resolved; Codex conceded 3 disputed points; 37 Codex tests, 0 failing |
+| Round 3: adversarial TypeScript tests | `workspace-write`, owns `test/unit/codex.test.ts` | 24 tests, 6 failures + 7 review findings → 10 fixed, 3 rebutted (Codex conceded) |
+| Round 3b: Codex attacks the round-3 fixes | same session | 5 findings, all fixed; 31 Codex tests, 0 failing |
+| Round 4: cumulative regression review | `read-only` | see `docs/reviews/codex-02-final-review.md` |
+
+Full debate log with every verdict: `docs/reviews/codex-02-final-review.md`.
 
 ## Remaining issues / future work
 

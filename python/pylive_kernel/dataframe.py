@@ -107,6 +107,20 @@ def _filter_mask(series: Any, op: str, value: Any) -> Any:
             dec = decimal.Decimal(str(value).strip())
             if not dec.is_finite():
                 raise ValueError("not a finite number")
+            # Out-of-range targets ("1e999999999") are answered without ever
+            # building the huge int, which could stall the kernel in C code.
+            import numpy as np
+
+            bounds = np.iinfo(getattr(dtype, "numpy_dtype", dtype))
+            if dec > bounds.max or dec < bounds.min:
+                notna = series.notna().to_numpy()
+                none = notna & False
+                above = dec > bounds.max
+                if op in ("lt", "le"):
+                    return notna if above else none
+                if op in ("gt", "ge"):
+                    return none if above else notna
+                return notna if op == "ne" else none
             if dec == dec.to_integral_value():
                 target = int(dec)
             else:
