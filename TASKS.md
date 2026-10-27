@@ -29,9 +29,9 @@ Status legend: ✅ done (with evidence) · ⏳ open
 | 8 | UI responsive during execution | integration test: max event-loop lag 16 ms during 3 s computation |
 | 9 | Interrupt / restart | `test_interrupt_*`, integration interrupt + restart tests, 16 ms interrupt latency |
 | 10 | Stale responses dropped | LiveScheduler tests; `stale_handle` / `stale_revision` tests; webview request sequence numbers |
-| 11 | Automated tests | 115 pytest (incl. 37 written by Codex), 53 node:test (incl. 31 by Codex), 8 VS Code integration — all passing |
+| 11 | Automated tests | 119 pytest (incl. 37 written by Codex), 53 node:test (incl. 31 by Codex), 8 VS Code integration — all passing |
 | 12 | Large synthetic dataset | 500 k and 1 M rows benchmarked; 200 k-row pytest fixture |
-| 13 | VSIX generated | `pylive-inspector-0.1.0.vsix` (21 files, 66 KB), installed into a temp extensions dir |
+| 13 | VSIX generated | `pylive-inspector-0.1.0.vsix` (22 files, 73.5 KB, rebuilt after all Codex rounds), installed into a temp extensions dir |
 | 14 | Installation documented | README "Install (local VSIX)" |
 | 15 | Codex implementation + review | see Codex log below |
 
