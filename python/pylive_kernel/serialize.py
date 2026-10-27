@@ -22,16 +22,34 @@ DEFAULT_MAX_STR = 200
 JsonValue = Any
 
 
+# Read class metadata through type's own descriptors: `t.__module__` would
+# run a property defined on a user metaclass.
+_TYPE_MODULE = type.__dict__["__module__"]
+_TYPE_QUALNAME = type.__dict__["__qualname__"]
+
+
+def type_module(t: type) -> str:
+    try:
+        m = _TYPE_MODULE.__get__(t, type)
+    except AttributeError:
+        return "?"
+    return m if isinstance(m, str) else "?"
+
+
+def type_qualname(t: type) -> str:
+    return _TYPE_QUALNAME.__get__(t, type)
+
+
 def type_name(obj: object) -> str:
     t = type(obj)
-    module = t.__module__
-    if module in ("builtins", "__main__", None):
-        return t.__qualname__
-    return f"{module}.{t.__qualname__}"
+    module = type_module(t)
+    if module in ("builtins", "__main__"):
+        return type_qualname(t)
+    return f"{module}.{type_qualname(t)}"
 
 
 def short_type_name(obj: object) -> str:
-    return type(obj).__qualname__
+    return type_qualname(type(obj))
 
 
 def _tag(kind: str, value: str | None = None, **extra: Any) -> dict[str, Any]:
@@ -67,11 +85,12 @@ def encode_int(i: int) -> JsonValue:
 
 
 def _is_pandas(t: type) -> bool:
-    return t.__module__.startswith("pandas")
+    return type_module(t).startswith("pandas")
 
 
 def _is_numpy(t: type) -> bool:
-    return t.__module__ == "numpy" or t.__module__.startswith("numpy.")
+    m = type_module(t)
+    return m == "numpy" or m.startswith("numpy.")
 
 
 def encode_scalar(v: object, max_str: int = DEFAULT_MAX_STR) -> JsonValue:

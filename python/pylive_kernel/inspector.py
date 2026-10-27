@@ -7,12 +7,13 @@ columns are therefore a lower bound, which the UI marks with ">=".
 
 from __future__ import annotations
 
+import collections
 import sys
 import types
 from typing import Any
 
-from .heap import HeapEncoder, approx_size, instance_dict, viz_hint
-from .serialize import encode_scalar, encode_str, type_name
+from .heap import HeapEncoder, approx_size, class_mro, instance_dict, is_class, viz_hint
+from .serialize import encode_scalar, encode_str, type_module, type_name, type_qualname
 
 MAX_VARIABLES = 500
 PREVIEW_ITEMS = 8
@@ -21,48 +22,49 @@ PREVIEW_ITEMS = 8
 def _is_hidden(name: str, value: object) -> bool:
     if name.startswith("_"):
         return True
-    if isinstance(value, types.ModuleType):
-        return True
-    return False
+    # issubclass(type(x), ...) instead of isinstance: isinstance falls back to
+    # x.__class__, which a user property can override.
+    return issubclass(type(value), types.ModuleType)
 
 
 def _kind(value: object) -> str:
     t = type(value)
-    mod = t.__module__
-    if isinstance(value, bool):
+    mod = type_module(t)
+    name = type_qualname(t)
+    if t is bool:
         return "bool"
     if t in (int, float, complex):
         return "number"
     if t is str:
         return "str"
-    if t in (list, tuple, set, frozenset, dict) or t.__name__ == "deque":
+    if t in (list, tuple, set, frozenset, dict, collections.deque):
         return t.__name__
     if mod.startswith("pandas"):
-        if t.__name__ == "DataFrame":
+        if name == "DataFrame":
             return "dataframe"
-        if t.__name__ == "Series":
+        if name == "Series":
             return "series"
         return "pandas"
-    if mod == "numpy" and t.__name__ == "ndarray":
+    if mod == "numpy" and name == "ndarray":
         return "ndarray"
     if mod.startswith("numpy"):
         np = sys.modules.get("numpy")
-        if np is not None and isinstance(value, np.generic):
-            return "bool" if isinstance(value, np.bool_) else "number"
+        if np is not None and issubclass(t, np.generic):
+            return "bool" if issubclass(t, np.bool_) else "number"
     if _is_sklearn_estimator(value):
         return "estimator"
-    if isinstance(value, type):
+    if is_class(value):
         return "class"
-    if isinstance(value, (types.FunctionType, types.BuiltinFunctionType, types.MethodType)):
+    if issubclass(t, (types.FunctionType, types.BuiltinFunctionType, types.MethodType)):
         return "function"
     return "object"
 
 
 def _is_sklearn_estimator(value: object) -> bool:
     t = type(value)
-    if not t.__module__.startswith("sklearn") or isinstance(value, type):
+    if not type_module(t).startswith("sklearn") or is_class(value):
         return False
-    return any(k.__name__ == "BaseEstimator" for k in t.__mro__)
+    return any(type_qualname(k) == "BaseEstimator" for k in class_mro(t))
 
 
 def _preview_items(items: list[Any]) -> list[Any]:
@@ -150,10 +152,12 @@ def _fill(info: dict[str, Any], kind: str, value: Any) -> None:
         info["fittedAttrs"] = fitted[:12]
         return
     if kind == "function":
-        info["value"] = {"$t": "fn", "v": getattr(value, "__qualname__", "?")}
+        # Bound methods forward attribute reads to an arbitrary __func__.
+        name = value.__qualname__ if type(value) in (types.FunctionType, types.BuiltinFunctionType) else type_qualname(type(value))
+        info["value"] = {"$t": "fn", "v": name}
         return
     if kind == "class":
-        info["value"] = {"$t": "cls", "v": value.__qualname__}
+        info["value"] = {"$t": "cls", "v": type_qualname(value)}
         return
     if kind == "object":
         info["viz"] = viz_hint(value)

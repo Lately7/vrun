@@ -16,9 +16,20 @@ from __future__ import annotations
 
 import collections
 import sys
+import types
 from typing import Any
 
-from .serialize import encode_scalar, type_name
+from .serialize import encode_scalar, type_module, type_name, type_qualname
+
+
+def is_class(obj: object) -> bool:
+    # issubclass on type(obj) avoids isinstance's __class__ fallback, which
+    # can run a user-defined property.
+    return issubclass(type(obj), type)
+
+
+def is_ndarray(t: type) -> bool:
+    return type_module(t) == "numpy" and type_qualname(t) == "ndarray"
 
 _SEQ_KINDS: dict[type, str] = {
     list: "list",
@@ -78,21 +89,19 @@ class HeapEncoder:
         t = type(obj)
         if t in _SEQ_KINDS or t is dict:
             return True
-        if t.__module__ in USER_MODULES and not isinstance(obj, type):
+        if type_module(t) in USER_MODULES and not is_class(obj):
             return True
-        mod = t.__module__
-        if mod == "numpy" and t.__name__ == "ndarray":
-            return True
-        return False
+        return is_ndarray(t)
 
     def _value(self, v: object) -> Any:
         if type(v) in _SCALAR_TYPES or not self._expandable(v):
-            if callable(v) and not isinstance(v, type) and type(v).__module__ == "builtins":
-                return {"$t": "fn", "v": getattr(v, "__name__", "?")}
-            if isinstance(v, type):
-                return {"$t": "cls", "v": v.__qualname__}
-            if type(v).__name__ == "function":
+            t = type(v)
+            if is_class(v):
+                return {"$t": "cls", "v": type_qualname(v)}  # type: ignore[arg-type]
+            if t is types.FunctionType:
                 return {"$t": "fn", "v": v.__qualname__}  # type: ignore[attr-defined]
+            if t is types.BuiltinFunctionType:
+                return {"$t": "fn", "v": v.__name__}  # type: ignore[attr-defined]
             return encode_scalar(v, self.max_str)
         oid = self._object_id(v)
         key = str(oid)
@@ -140,14 +149,25 @@ class HeapEncoder:
                     break
                 items.append(self._value(item))
             return {"kind": kind, "items": items, "len": len(seq)}  # type: ignore[arg-type]
-        if t.__module__ == "numpy" and t.__name__ == "ndarray":
+        if is_ndarray(t):
             return self._ndarray(obj)
         return self._user_object(obj)
 
     def _ndarray(self, arr: Any) -> dict[str, Any]:
         shape = list(arr.shape)
         node: dict[str, Any] = {"kind": "ndarray", "shape": shape, "dtype": str(arr.dtype)}
-        enc = self._array_scalar
+        structured = arr.dtype.fields is not None
+        object_dtype = arr.dtype.kind == "O"
+
+        def enc(x: Any) -> Any:
+            # Records of structured arrays come out of tolist() as tuples; a
+            # tuple stored in an object array is not a record.
+            if structured and type(x) is tuple:
+                return {"$t": "record", "v": _record_text(x)}
+            if object_dtype:
+                return self._value(x)  # elements may be containers or user objects
+            return encode_scalar(x, self.max_str)
+
         if arr.ndim == 0:
             node["value"] = enc(arr.item())
         elif arr.ndim == 1:
@@ -156,13 +176,6 @@ class HeapEncoder:
             rows = arr[: self.max_items, : self.max_items].tolist()
             node["rows"] = [[enc(x) for x in r] for r in rows]
         return node
-
-    def _array_scalar(self, x: Any) -> Any:
-        # Structured-array records come out of tolist() as tuples.
-        if type(x) is tuple:
-            return {"$t": "record", "v": "(" + ", ".join(
-                _plain(encode_scalar(v, 40)) for v in x[:16]) + ")"}
-        return encode_scalar(x, self.max_str)
 
     def _user_object(self, obj: object) -> dict[str, Any]:
         fields: list[list[Any]] = []
@@ -173,23 +186,42 @@ class HeapEncoder:
                     break
                 if isinstance(k, str) and not k.startswith("__"):
                     fields.append([k, self._value(val)])
-        for slot, desc in _slot_descriptors(type(obj)):
+        t = type(obj)
+        for slot, desc in _slot_descriptors(t):
             try:
-                val = desc.__get__(obj, type(obj))
+                val = desc.__get__(obj, t)
             except AttributeError:
                 continue
             fields.append([slot, self._value(val)])
-        return {"kind": "object", "type": type(obj).__qualname__, "fields": fields}
+        return {"kind": "object", "type": type_qualname(t), "fields": fields}
 
 
-def _plain(enc: Any) -> str:
-    if isinstance(enc, dict):
-        return str(enc.get("v", enc.get("$t")))
-    return str(enc)
+def _record_text(rec: tuple[Any, ...], depth: int = 0) -> str:
+    """Display text of a (possibly nested) structured-array record."""
+    parts = []
+    for v in rec[:16]:
+        if type(v) is tuple and depth < 4:
+            parts.append(_record_text(v, depth + 1))
+        else:
+            enc = encode_scalar(v, 40)
+            parts.append(str(enc.get("v", enc.get("$t"))) if isinstance(enc, dict) else str(enc))
+    return "(" + ", ".join(parts) + ")"
 
 
-_GETSET = type(type.__dict__["__dict__"])  # getset_descriptor
+# Built-in descriptors fetched from `type` itself. Going through them never
+# consults a user metaclass (whose properties could shadow __dict__/__mro__).
+_TYPE_DICT = type.__dict__["__dict__"]
+_TYPE_MRO = type.__dict__["__mro__"]
+_GETSET = type(_TYPE_DICT)  # getset_descriptor
 _MEMBER = type(type.__dict__["__dictoffset__"])  # member_descriptor
+
+
+def class_ns(klass: type) -> Any:
+    return _TYPE_DICT.__get__(klass, type)
+
+
+def class_mro(t: type) -> tuple[type, ...]:
+    return _TYPE_MRO.__get__(t, type)
 
 
 def instance_dict(obj: object) -> dict[str, Any] | None:
@@ -198,14 +230,15 @@ def instance_dict(obj: object) -> dict[str, Any] | None:
     object.__getattribute__(obj, "__dict__") would run a class-level
     ``__dict__`` property defined by the user; this never does.
     """
-    for klass in type(obj).__mro__:
-        desc = klass.__dict__.get("__dict__")
+    t = type(obj)
+    for klass in class_mro(t):
+        desc = class_ns(klass).get("__dict__")
         if desc is None:
             continue
         if type(desc) is not _GETSET:
             return None  # shadowed by user code: treat the object as opaque
         try:
-            d = desc.__get__(obj, type(obj))
+            d = desc.__get__(obj, t)
         except (AttributeError, TypeError):
             return None
         return d if type(d) is dict else None
@@ -215,19 +248,20 @@ def instance_dict(obj: object) -> dict[str, Any] | None:
 def _slot_descriptors(t: type) -> list[tuple[str, Any]]:
     out: list[tuple[str, Any]] = []
     for name in _slot_names(t):
-        for klass in t.__mro__:
-            desc = klass.__dict__.get(name)
-            if desc is not None:
-                if type(desc) is _MEMBER:  # skip properties shadowing a slot
-                    out.append((name, desc))
+        for klass in class_mro(t):
+            desc = class_ns(klass).get(name)
+            # A subclass property may shadow the name; the base slot still
+            # holds the value, so keep looking for the member descriptor.
+            if type(desc) is _MEMBER:
+                out.append((name, desc))
                 break
     return out
 
 
 def _slot_names(t: type) -> list[str]:
     names: list[str] = []
-    for klass in t.__mro__:
-        slots = klass.__dict__.get("__slots__")
+    for klass in class_mro(t):
+        slots = class_ns(klass).get("__slots__")
         if slots is None:
             continue
         if isinstance(slots, str):
@@ -263,7 +297,7 @@ def viz_hint(obj: object) -> str | None:
         if vals and all(type(v) in (list, set, tuple, dict) for v in vals):
             return "graph"
         return "dict"
-    if t.__module__ in USER_MODULES:
+    if type_module(t) in USER_MODULES and not is_class(obj):
         d2 = instance_dict(obj) or {}
         keys = set(d2) | set(_slot_names(t))
         if {"left", "right"} & keys:
@@ -273,7 +307,7 @@ def viz_hint(obj: object) -> str | None:
         if "children" in keys:
             return "tree"
         return "object"
-    if t.__module__ == "numpy" and t.__name__ == "ndarray":
+    if is_ndarray(t):
         ndim = getattr(obj, "ndim", 0)
         return "array" if ndim == 1 else "matrix" if ndim == 2 else None
     return None

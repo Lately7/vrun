@@ -77,16 +77,27 @@ def test_raising_repr_as_last_expression_is_safe(kernel):
     assert kernel.run("40 + 2")["value"]["repr"] == "42"
 
 
-def test_replacing_sys_stdout_does_not_disable_future_capture(kernel):
-    kernel.run("import io, sys\nsys.stdout = io.StringIO()")
+def test_replacing_and_restoring_sys_stdout_follows_python_semantics(kernel):
+    kernel.run("import io, sys\nredirected = io.StringIO()\nsys.stdout = redirected")
     before = len(kernel.events)
-    result = kernel.run("print('still captured')\n17", execId="after-replacement")
-    new_events = kernel.events[before:]
+    kernel.run("print('only in buffer')", execId="redirected")
+    redirected_events = kernel.events[before:]
 
-    assert result["value"]["repr"] == "17"
+    assert not any(
+        event.get("event") == "stream" and "only in buffer" in event.get("text", "")
+        for event in redirected_events
+    )
+    assert kernel.run("redirected.getvalue()")["value"]["repr"] == "'only in buffer\\n'"
+
+    kernel.run("sys.stdout = sys.__stdout__")
+    before = len(kernel.events)
+    kernel.run("print('capture restored')", execId="restored")
+    restored_events = kernel.events[before:]
     assert any(
-        event.get("event") == "stream" and "still captured" in event.get("text", "")
-        for event in new_events
+        event.get("event") == "stream"
+        and event.get("execId") == "restored"
+        and "capture restored" in event.get("text", "")
+        for event in restored_events
     )
 
 
@@ -154,6 +165,47 @@ def test_slots_and_hostile_dict_descriptor_are_inspected_without_user_code(kerne
     assert kernel.run("dict_reads")["value"]["repr"] == "0"
 
 
+def test_metaclass_dict_property_is_not_run_by_inspection(kernel):
+    kernel.run(
+        "meta_dict_reads = []\n"
+        "class DictMeta(type):\n"
+        "    @property\n"
+        "    def __dict__(cls):\n"
+        "        meta_dict_reads.append('read')\n"
+        "        raise RuntimeError('metaclass __dict__ must not run')\n"
+        "class MetaVictim(metaclass=DictMeta):\n"
+        "    pass\n"
+        "meta_victim = MetaVictim()"
+    )
+    response = kernel.call("variables.inspect", name="meta_victim")
+    reads = kernel.run("meta_dict_reads")["value"]["repr"]
+
+    assert response["ok"] is True and reads == "[]", (response, reads)
+
+
+def test_shadowing_property_does_not_hide_safe_base_slot(kernel):
+    kernel.run(
+        "slot_property_reads = 0\n"
+        "class BaseSlot:\n"
+        "    __slots__ = ('value',)\n"
+        "class SlotChild(BaseSlot):\n"
+        "    __slots__ = ()\n"
+        "    @property\n"
+        "    def value(self):\n"
+        "        global slot_property_reads\n"
+        "        slot_property_reads += 1\n"
+        "        raise RuntimeError('property must not run')\n"
+        "shadowed_slot = SlotChild()\n"
+        "BaseSlot.__dict__['value'].__set__(shadowed_slot, 42)"
+    )
+    info = kernel.call("variables.inspect", name="shadowed_slot")["result"]
+    root = info["root"]["ref"]
+    fields = dict(info["heap"][str(root)]["fields"])
+
+    assert fields["value"] == 42
+    assert kernel.run("slot_property_reads")["value"]["repr"] == "0"
+
+
 def test_dataframe_duplicate_multiindex_and_non_string_columns(kernel):
     pytest.importorskip("pandas")
     kernel.run(
@@ -208,6 +260,52 @@ def test_dataframe_invalid_boolean_filter_is_rejected(kernel):
 
     assert response["ok"] is False
     assert response["error"]["code"] == "bad_request"
+
+
+def test_dataframe_nullable_boolean_filters_do_not_match_na(kernel):
+    pytest.importorskip("pandas")
+    kernel.run(
+        "import pandas as pd\n"
+        "nullable_bool_df = pd.DataFrame({\n"
+        "    'flag': pd.Series([True, False, pd.NA], dtype='boolean')\n"
+        "})"
+    )
+    false_page = kernel.call(
+        "dataframe.page",
+        name="nullable_bool_df",
+        offset=0,
+        limit=10,
+        filter={"column": 0, "op": "eq", "value": "false"},
+    )["result"]
+    true_page = kernel.call(
+        "dataframe.page",
+        name="nullable_bool_df",
+        offset=0,
+        limit=10,
+        filter={"column": 0, "op": "eq", "value": "TRUE"},
+    )["result"]
+
+    assert false_page["positions"] == [1]
+    assert true_page["positions"] == [0]
+
+
+def test_dataframe_nullable_integer_decimal_filter_is_exact_above_2_53(kernel):
+    pytest.importorskip("pandas")
+    kernel.run(
+        "import pandas as pd\n"
+        "nullable_big_df = pd.DataFrame({\n"
+        "    'n': pd.Series([2**53, 2**53 + 1, pd.NA], dtype='Int64')\n"
+        "})"
+    )
+    page = kernel.call(
+        "dataframe.page",
+        name="nullable_big_df",
+        offset=0,
+        limit=10,
+        filter={"column": 0, "op": "eq", "value": f"{2**53 + 1}.0"},
+    )["result"]
+
+    assert page["positions"] == [1]
 
 
 def test_dataframe_timezone_and_numeric_category_filters(kernel):
@@ -347,6 +445,22 @@ def test_numpy_zero_dimensional_array_inspection_includes_value(kernel):
     assert "7" in json.dumps(payload)
 
 
+def test_numpy_zero_dimensional_object_tuple_is_not_a_structured_record(kernel):
+    pytest.importorskip("numpy")
+    kernel.run(
+        "import numpy as np\n"
+        "object_scalar = np.empty((), dtype=object)\n"
+        "object_scalar[()] = (1, 2)"
+    )
+    info = kernel.call("variables.inspect", name="object_scalar")["result"]
+    root = info["root"]["ref"]
+    value = info["heap"][str(root)]["value"]
+    encoded = json.dumps(value, sort_keys=True)
+
+    assert not (isinstance(value, dict) and value.get("$t") == "record")
+    assert "1" in encoded and "2" in encoded
+
+
 def test_numpy_structured_array_inspection_preserves_record_values(kernel):
     pytest.importorskip("numpy")
     kernel.run(
@@ -359,6 +473,89 @@ def test_numpy_structured_array_inspection_preserves_record_values(kernel):
     encoded = json.dumps(first, sort_keys=True)
 
     assert "1" in encoded and "2.5" in encoded
+
+
+def test_numpy_nested_structured_array_preserves_nested_field_values(kernel):
+    pytest.importorskip("numpy")
+    kernel.run(
+        "import numpy as np\n"
+        "nested_records = np.array([((1, 2), 'ok')], dtype=[\n"
+        "    ('point', [('x', 'i4'), ('y', 'i4')]), ('label', 'U4')\n"
+        "])"
+    )
+    info = kernel.call("variables.inspect", name="nested_records")["result"]
+    root = info["root"]["ref"]
+    first = info["heap"][str(root)]["items"][0]
+    encoded = json.dumps(first, sort_keys=True)
+
+    assert first["$t"] == "record"
+    assert all(value in encoded for value in ('1', '2', 'ok'))
+
+
+def test_thread_pool_reuse_attributes_each_job_to_submitting_execution(kernel):
+    kernel.run(
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "pool = ThreadPoolExecutor(max_workers=1)\n"
+        "pool.submit(lambda: None).result()",
+        execId="pool-first",
+    )
+    before = len(kernel.events)
+    kernel.run(
+        "pool.submit(lambda: print('from-reused-pool-thread')).result()",
+        execId="pool-second",
+    )
+    events = [
+        event for event in kernel.events[before:]
+        if event.get("event") == "stream" and "from-reused-pool-thread" in event.get("text", "")
+    ]
+
+    assert events
+    assert {event.get("execId") for event in events} == {"pool-second"}
+
+
+def test_raw_thread_output_keeps_originating_exec_id(kernel):
+    before = len(kernel.events)
+    kernel.run(
+        "import _thread, threading\n"
+        "raw_done = threading.Event()\n"
+        "def raw_print():\n"
+        "    print('from-raw-thread')\n"
+        "    raw_done.set()\n"
+        "_thread.start_new_thread(raw_print, ())\n"
+        "assert raw_done.wait(2)",
+        execId="raw-origin",
+    )
+    events = [
+        event for event in kernel.events[before:]
+        if event.get("event") == "stream" and "from-raw-thread" in event.get("text", "")
+    ]
+
+    assert events
+    assert {event.get("execId") for event in events} == {"raw-origin"}
+
+
+def test_thread_subclass_overriding_start_keeps_originating_exec_id(kernel):
+    before = len(kernel.events)
+    kernel.run(
+        "import _thread, threading\n"
+        "subclass_done = threading.Event()\n"
+        "class DirectStartThread(threading.Thread):\n"
+        "    def start(self):\n"
+        "        _thread.start_new_thread(self.run, ())\n"
+        "def subclass_print():\n"
+        "    print('from-overridden-start')\n"
+        "    subclass_done.set()\n"
+        "DirectStartThread(target=subclass_print).start()\n"
+        "assert subclass_done.wait(2)",
+        execId="subclass-origin",
+    )
+    events = [
+        event for event in kernel.events[before:]
+        if event.get("event") == "stream" and "from-overridden-start" in event.get("text", "")
+    ]
+
+    assert events
+    assert {event.get("execId") for event in events} == {"subclass-origin"}
 
 
 def test_os_exit_inside_trace_terminates_worker_without_hanging(kernel):

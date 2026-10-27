@@ -7,9 +7,10 @@ because any execution may mutate the frame in place (ADR-004).
 
 from __future__ import annotations
 
+import decimal
 from typing import Any
 
-from .serialize import encode_label, encode_scalar
+from .serialize import encode_label, encode_scalar, type_module, type_qualname
 
 MAX_PAGE_ROWS = 500
 MAX_PAGE_COLS = 200
@@ -24,11 +25,11 @@ class BadRequest(ValueError):
 def _frame(value: Any) -> Any:
     """Return a DataFrame view for DataFrame or Series values."""
     t = type(value)
-    if not t.__module__.startswith("pandas"):
+    if not type_module(t).startswith("pandas"):
         raise BadRequest("variable is not a pandas DataFrame or Series")
-    if t.__name__ == "Series":
+    if type_qualname(t) == "Series":
         return value.to_frame(name=value.name if value.name is not None else "value")
-    if t.__name__ != "DataFrame":
+    if type_qualname(t) != "DataFrame":
         raise BadRequest("variable is not a pandas DataFrame or Series")
     return value
 
@@ -101,12 +102,22 @@ def _filter_mask(series: Any, op: str, value: Any) -> Any:
             else:
                 raise ValueError("expected true/false")
         elif pt.is_integer_dtype(dtype):
-            # Exact integer comparison: float() would merge values above 2**53.
-            text = str(value).strip()
-            try:
-                target = int(text)
-            except ValueError:
-                target = float(text)
+            # Exact arithmetic: float() would merge integers above 2**53, so
+            # parse as Decimal and turn the comparison into an integer one.
+            dec = decimal.Decimal(str(value).strip())
+            if not dec.is_finite():
+                raise ValueError("not a finite number")
+            if dec == dec.to_integral_value():
+                target = int(dec)
+            else:
+                floor = int(dec.to_integral_value(rounding=decimal.ROUND_FLOOR))
+                if op == "eq":
+                    return series.notna().to_numpy() & False
+                if op == "ne":
+                    return series.notna().to_numpy()
+                # x < 2.5  <=>  x <= 2 ;  x > 2.5  <=>  x >= 3
+                op, target = {"lt": ("le", floor), "le": ("le", floor),
+                              "gt": ("ge", floor + 1), "ge": ("ge", floor + 1)}[op]
         elif pt.is_numeric_dtype(dtype):
             target = float(value)
         elif pt.is_datetime64_any_dtype(dtype):
@@ -115,7 +126,7 @@ def _filter_mask(series: Any, op: str, value: Any) -> Any:
                 target = target.tz_localize(dtype.tz)
         else:
             target = str(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, ArithmeticError) as exc:
         raise BadRequest(f"cannot compare column ({dtype}) with {value!r}: {exc}") from None
     ops = {"eq": "__eq__", "ne": "__ne__", "lt": "__lt__", "le": "__le__", "gt": "__gt__", "ge": "__ge__"}
     try:
