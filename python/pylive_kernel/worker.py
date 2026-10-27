@@ -29,7 +29,8 @@ MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 STREAM_FLUSH_BYTES = 8192
 STREAM_FLUSH_SECONDS = 0.05
-MAX_OUTPUT_PER_EXEC = 2 * 1024 * 1024
+MAX_OUTPUT_PER_EXEC = 2 * 1024 * 1024  # UTF-8 bytes
+STREAM_CHUNK_CHARS = 256 * 1024
 CONTROL_TYPES = {"interrupt", "cancel", "shutdown", "ping"}
 TASK_TYPES = {
     "execute", "trace", "analyze", "variables.list", "variables.inspect",
@@ -56,8 +57,10 @@ class Writer:
 
     def send(self, msg: dict[str, Any]) -> None:
         try:
+            # "replace": lone surrogates (e.g. from os.fsdecode) must not make
+            # a whole message unsendable.
             data = json.dumps(msg, separators=(",", ":"), ensure_ascii=False,
-                              allow_nan=False, default=_json_default).encode("utf-8")
+                              allow_nan=False, default=_json_default).encode("utf-8", "replace")
         except (TypeError, ValueError) as exc:
             data = json.dumps({"type": "response", "id": msg.get("id"), "ok": False,
                                "error": {"code": "serialization_error", "message": str(exc)[:500]}}
@@ -102,34 +105,58 @@ class CaptureStream:
         self._size = 0
         self._last = time.monotonic()
         self._lock = threading.Lock()
+        self._exec_id: Any = None
 
     def write(self, s: str) -> int:
         if not isinstance(s, str):
             raise TypeError(f"write() argument must be str, not {type(s).__name__}")
+        exec_id = self._worker.exec_id_for_current_thread()
         with self._lock:
+            if exec_id != self._exec_id:
+                # Never merge text of two executions into one event.
+                self._flush_locked()
+                self._exec_id = exec_id
             w = self._worker
             room = MAX_OUTPUT_PER_EXEC - w.output_bytes
             if room <= 0:
-                if not w.output_truncated:
-                    w.output_truncated = True
-                    self._buf.append("\n[PyLive: output truncated]\n")
+                self._mark_truncated()
                 return len(s)
-            chunk = s[:room]
-            w.output_bytes += len(chunk)
-            self._buf.append(chunk)
-            self._size += len(chunk)
+            # Budget in UTF-8 bytes: the protocol limit is in bytes, and one
+            # character can take up to 4.
+            encoded = s.encode("utf-8", "surrogatepass")
+            if len(encoded) > room:
+                chunk = encoded[:room].decode("utf-8", "ignore")
+                w.output_bytes = MAX_OUTPUT_PER_EXEC
+                self._buf.append(chunk)
+                self._size += len(chunk)
+                self._mark_truncated()
+            else:
+                chunk = s
+                w.output_bytes += len(encoded)
+                self._buf.append(chunk)
+                self._size += len(chunk)
             now = time.monotonic()
             if self._size >= STREAM_FLUSH_BYTES or now - self._last >= STREAM_FLUSH_SECONDS:
                 self._flush_locked()
         return len(s)
+
+    def _mark_truncated(self) -> None:
+        w = self._worker
+        if not w.output_truncated:
+            w.output_truncated = True
+            self._buf.append("\n[PyLive: output truncated]\n")
 
     def _flush_locked(self) -> None:
         if self._buf:
             text = "".join(self._buf)
             self._buf.clear()
             self._size = 0
-            self._worker.writer.send({"type": "event", "event": "stream", "name": self.name,
-                                      "text": text, "execId": self._worker.current_exec_id})
+            # Chunks of <= STREAM_CHUNK_CHARS keep every event far below the
+            # message size limit (at most 4 bytes per character).
+            for start in range(0, len(text), STREAM_CHUNK_CHARS):
+                self._worker.writer.send({"type": "event", "event": "stream", "name": self.name,
+                                          "text": text[start:start + STREAM_CHUNK_CHARS],
+                                          "execId": self._exec_id})
         self._last = time.monotonic()
 
     def flush(self) -> None:
@@ -202,13 +229,34 @@ class Worker:
 
     # -- setup -------------------------------------------------------------
     def install_streams(self) -> None:
-        sys.stdout = CaptureStream(self, "stdout")  # type: ignore[assignment]
-        sys.stderr = CaptureStream(self, "stderr")  # type: ignore[assignment]
+        self.capture_out = CaptureStream(self, "stdout")
+        self.capture_err = CaptureStream(self, "stderr")
+        sys.stdout = self.capture_out  # type: ignore[assignment]
+        sys.stderr = self.capture_err  # type: ignore[assignment]
+        # The common restore idiom `sys.stdout = sys.__stdout__` must bring
+        # capture back; the real fd 1 now points at the kernel log.
+        sys.__stdout__ = self.capture_out  # type: ignore[misc]
+        sys.__stderr__ = self.capture_err  # type: ignore[misc]
+        # Output from threads is attributed to the execution that started them.
+        original_start = threading.Thread.start
+        worker = self
+
+        def start(thread: threading.Thread) -> None:
+            thread._pylive_exec_id = worker.current_exec_id  # type: ignore[attr-defined]
+            original_start(thread)
+
+        threading.Thread.start = start  # type: ignore[method-assign]
         sys.stdin = _NoInput()  # type: ignore[assignment]
         import builtins
         builtins.input = _no_input  # type: ignore[assignment]
         signal.signal(signal.SIGINT, signal.default_int_handler)
         executor.silence_agg_show_warning()
+
+    def exec_id_for_current_thread(self) -> Any:
+        t = threading.current_thread()
+        if t is threading.main_thread():
+            return self.current_exec_id
+        return getattr(t, "_pylive_exec_id", None)
 
     # -- reader thread -----------------------------------------------------
     def reader(self) -> None:
@@ -373,12 +421,12 @@ class Worker:
         return _num(p.get("timeoutMs"), 20000, 100, 600_000) / 1000
 
     def _flush_streams(self) -> None:
-        for s in (sys.stdout, sys.stderr):
-            if isinstance(s, CaptureStream):
-                try:
-                    s.flush()
-                except KeyboardInterrupt:
-                    pass
+        # Flush our own streams even if user code replaced sys.stdout.
+        for s in (self.capture_out, self.capture_err):
+            try:
+                s.flush()
+            except KeyboardInterrupt:
+                pass
 
     # -- dispatch ----------------------------------------------------------
     def dispatch(self, task: Task) -> Any:

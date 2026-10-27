@@ -17,6 +17,7 @@ import builtins
 import io
 import json
 import sys
+import threading
 import time
 import types
 from typing import Any
@@ -57,6 +58,35 @@ class _BoundedOutput(io.TextIOBase):
 
     def getvalue(self) -> str:
         return "".join(self.parts)
+
+
+class _ThreadRouter:
+    """sys.stdout stand-in: the traced thread writes to the trace buffer."""
+
+    def __init__(self, fallback: Any, trace_out: _BoundedOutput, tid: int) -> None:
+        self._fallback = fallback
+        self._trace_out = trace_out
+        self._tid = tid
+
+    def _target(self) -> Any:
+        return self._trace_out if threading.get_ident() == self._tid else self._fallback
+
+    def write(self, s: str) -> int:
+        return self._target().write(s)
+
+    def flush(self) -> None:
+        target = self._target()
+        if hasattr(target, "flush"):
+            target.flush()
+
+    def writable(self) -> bool:
+        return True
+
+    def isatty(self) -> bool:
+        return False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._target(), name)
 
 
 _HIDDEN_GLOBALS = {"__builtins__", "__name__", "__doc__", "__package__", "__loader__",
@@ -151,16 +181,20 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
     module = types.ModuleType(TRACE_MODULE)
     ns = module.__dict__
     ns["__builtins__"] = builtins
-    ns["__name__"] = "__main__"
     # Classes defined by the traced code get __module__ == "__main__" via
-    # __name__; register a module so HeapEncoder recognises them as user types.
+    # __name__, so HeapEncoder recognises them as user types. sys.modules is
+    # deliberately left alone: kernel threads must keep seeing the real
+    # persistent __main__ while a trace runs.
+    ns["__name__"] = "__main__"
     out = _BoundedOutput(200_000)
     rec = Recorder(max_steps, max_bytes, max_seconds, max_nodes, max_items, out)
     error = None
     old_out, old_err = sys.stdout, sys.stderr
-    old_main = sys.modules.get("__main__")
-    sys.stdout = sys.stderr = out  # type: ignore[assignment]
-    sys.modules["__main__"] = module
+    tid = threading.get_ident()
+    # Route only this thread's output into the trace; background threads of
+    # persistent user code keep writing to the normal kernel streams.
+    sys.stdout = _ThreadRouter(old_out, out, tid)  # type: ignore[assignment]
+    sys.stderr = _ThreadRouter(old_err, out, tid)  # type: ignore[assignment]
     started = time.perf_counter()
     sys.settrace(rec.global_trace)
     try:
@@ -175,8 +209,6 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
     finally:
         sys.settrace(None)
         sys.stdout, sys.stderr = old_out, old_err
-        if old_main is not None:
-            sys.modules["__main__"] = old_main
     elapsed = time.perf_counter() - started
     return {
         "steps": rec.steps,

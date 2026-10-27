@@ -19,6 +19,8 @@ _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_FIGURES = 8
 MAX_FIGURE_BYTES = 2 * 1024 * 1024
 MAX_FIGURE_PIXELS = 4096
+# Leaves headroom under the worker's 8 MiB message limit for the rest of the result.
+MAX_FIGURES_TOTAL_B64 = 5 * 1024 * 1024
 
 
 def make_user_module() -> types.ModuleType:
@@ -136,6 +138,7 @@ def capture_figures() -> list[dict[str, Any]]:
         nums = list(plt.get_fignums())
     except Exception:  # noqa: BLE001
         return []
+    budget = MAX_FIGURES_TOTAL_B64  # all figures share one response message
     for num in nums[:MAX_FIGURES]:
         try:
             fig = plt.figure(num)
@@ -144,9 +147,11 @@ def capture_figures() -> list[dict[str, Any]]:
             buf = io.BytesIO()
             fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
             data = buf.getvalue()
-            if len(data) > MAX_FIGURE_BYTES:
-                figures.append({"error": f"figure {num} too large ({len(data)} bytes)"})
+            encoded_len = (len(data) + 2) // 3 * 4
+            if len(data) > MAX_FIGURE_BYTES or encoded_len > budget:
+                figures.append({"error": f"figure {num} too large to display ({len(data)} bytes)"})
             else:
+                budget -= encoded_len
                 figures.append({"png": base64.b64encode(data).decode("ascii")})
         except Exception as exc:  # noqa: BLE001
             figures.append({"error": f"figure {num}: {type(exc).__name__}: {exc}"})

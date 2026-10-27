@@ -71,8 +71,12 @@ are replaced by a `message_too_large` error.
 | `cancel`             | reader thread| drop a queued (not yet started) request         |
 | `shutdown`           | reader thread| exit                                            |
 
-Variable handles are `{session, name}`. A request carrying a session that is
-not the worker's current session is rejected with `stale_handle`.
+Variable handles are `{session, revision, name}`. A request carrying a session
+that is not the worker's current session is rejected with `stale_handle`
+(kernel restarted); a request carrying an older `revision` (execution count)
+is rejected with `stale_revision`, and the DataFrame viewer reloads its
+metadata. Only one thread — the writer thread — writes protocol output, so a
+`KeyboardInterrupt` in the main thread can never cut a message in half.
 
 ## 4. Execution flow
 
@@ -108,11 +112,14 @@ Null counts and `describe()` are computed only when the user asks.
 
 ## 6. Interrupt handling
 
-* The reader thread receives `interrupt{execId}` and, if that task is still
+* The reader thread receives `interrupt{target}` and, if that task is still
   current, calls `_thread.interrupt_main()` (a simulated SIGINT →
-  `KeyboardInterrupt` at the next bytecode boundary). A per-task lock makes
-  sure a late interrupt never hits the following task; stray interrupts that
-  land in worker bookkeeping are swallowed.
+  `KeyboardInterrupt` at the next bytecode boundary). Under a lock, at most
+  one interrupt is issued per task, so exactly one `KeyboardInterrupt` can
+  arrive: inside the task, inside the bookkeeping after it (caught by an outer
+  handler that still sends the reply), or as a pending signal that a
+  `_drain_pending_interrupt()` call surfaces before the next task starts.
+  Interrupt also cancels queued executions.
 * Inspection requests have a worker-side deadline enforced the same way.
 * Long native calls (a single huge NumPy op, `time.sleep` on Windows, code
   that swallows `KeyboardInterrupt`) cannot be interrupted. After a grace

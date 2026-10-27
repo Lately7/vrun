@@ -147,32 +147,81 @@ class HeapEncoder:
     def _ndarray(self, arr: Any) -> dict[str, Any]:
         shape = list(arr.shape)
         node: dict[str, Any] = {"kind": "ndarray", "shape": shape, "dtype": str(arr.dtype)}
-        if arr.ndim == 1:
-            node["items"] = [encode_scalar(x) for x in arr[: self.max_items].tolist()]
+        enc = self._array_scalar
+        if arr.ndim == 0:
+            node["value"] = enc(arr.item())
+        elif arr.ndim == 1:
+            node["items"] = [enc(x) for x in arr[: self.max_items].tolist()]
         elif arr.ndim == 2:
             rows = arr[: self.max_items, : self.max_items].tolist()
-            node["rows"] = [[encode_scalar(x) for x in r] for r in rows]
+            node["rows"] = [[enc(x) for x in r] for r in rows]
         return node
+
+    def _array_scalar(self, x: Any) -> Any:
+        # Structured-array records come out of tolist() as tuples.
+        if type(x) is tuple:
+            return {"$t": "record", "v": "(" + ", ".join(
+                _plain(encode_scalar(v, 40)) for v in x[:16]) + ")"}
+        return encode_scalar(x, self.max_str)
 
     def _user_object(self, obj: object) -> dict[str, Any]:
         fields: list[list[Any]] = []
-        try:
-            d = object.__getattribute__(obj, "__dict__")
-        except AttributeError:
-            d = None
-        if type(d) is dict:
+        d = instance_dict(obj)
+        if d is not None:
             for i, (k, val) in enumerate(d.items()):
                 if i >= self.max_items:
                     break
                 if isinstance(k, str) and not k.startswith("__"):
                     fields.append([k, self._value(val)])
-        for slot in _slot_names(type(obj)):
+        for slot, desc in _slot_descriptors(type(obj)):
             try:
-                val = object.__getattribute__(obj, slot)
+                val = desc.__get__(obj, type(obj))
             except AttributeError:
                 continue
             fields.append([slot, self._value(val)])
         return {"kind": "object", "type": type(obj).__qualname__, "fields": fields}
+
+
+def _plain(enc: Any) -> str:
+    if isinstance(enc, dict):
+        return str(enc.get("v", enc.get("$t")))
+    return str(enc)
+
+
+_GETSET = type(type.__dict__["__dict__"])  # getset_descriptor
+_MEMBER = type(type.__dict__["__dictoffset__"])  # member_descriptor
+
+
+def instance_dict(obj: object) -> dict[str, Any] | None:
+    """The instance __dict__ via the built-in descriptor only.
+
+    object.__getattribute__(obj, "__dict__") would run a class-level
+    ``__dict__`` property defined by the user; this never does.
+    """
+    for klass in type(obj).__mro__:
+        desc = klass.__dict__.get("__dict__")
+        if desc is None:
+            continue
+        if type(desc) is not _GETSET:
+            return None  # shadowed by user code: treat the object as opaque
+        try:
+            d = desc.__get__(obj, type(obj))
+        except (AttributeError, TypeError):
+            return None
+        return d if type(d) is dict else None
+    return None
+
+
+def _slot_descriptors(t: type) -> list[tuple[str, Any]]:
+    out: list[tuple[str, Any]] = []
+    for name in _slot_names(t):
+        for klass in t.__mro__:
+            desc = klass.__dict__.get(name)
+            if desc is not None:
+                if type(desc) is _MEMBER:  # skip properties shadowing a slot
+                    out.append((name, desc))
+                break
+    return out
 
 
 def _slot_names(t: type) -> list[str]:
@@ -215,10 +264,7 @@ def viz_hint(obj: object) -> str | None:
             return "graph"
         return "dict"
     if t.__module__ in USER_MODULES:
-        try:
-            d2 = object.__getattribute__(obj, "__dict__")
-        except AttributeError:
-            d2 = {}
+        d2 = instance_dict(obj) or {}
         keys = set(d2) | set(_slot_names(t))
         if {"left", "right"} & keys:
             return "tree"
@@ -233,11 +279,19 @@ def viz_hint(obj: object) -> str | None:
     return None
 
 
+_SIZEOF_SAFE = (str, bytes, bytearray, list, tuple, dict, set, frozenset, int, float, complex,
+                collections.deque)
+
+
 def approx_size(obj: object) -> int | None:
-    try:
-        return sys.getsizeof(obj)
-    except Exception:  # noqa: BLE001
+    """Shallow size for exact built-in types only.
+
+    sys.getsizeof() calls __sizeof__, which user classes may override with
+    slow or side-effecting code, so other types report no size.
+    """
+    if type(obj) not in _SIZEOF_SAFE:
         return None
+    return sys.getsizeof(obj)
 
 
 __all__ = ["HeapEncoder", "viz_hint", "approx_size", "type_name", "USER_MODULES"]

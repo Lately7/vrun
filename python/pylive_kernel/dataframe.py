@@ -93,7 +93,20 @@ def _filter_mask(series: Any, op: str, value: Any) -> Any:
     target: Any = value
     try:
         if pt.is_bool_dtype(dtype):
-            target = str(value).strip().lower() in ("1", "true", "yes")
+            token = str(value).strip().lower()
+            if token in ("1", "true", "yes", "t"):
+                target = True
+            elif token in ("0", "false", "no", "f"):
+                target = False
+            else:
+                raise ValueError("expected true/false")
+        elif pt.is_integer_dtype(dtype):
+            # Exact integer comparison: float() would merge values above 2**53.
+            text = str(value).strip()
+            try:
+                target = int(text)
+            except ValueError:
+                target = float(text)
         elif pt.is_numeric_dtype(dtype):
             target = float(value)
         elif pt.is_datetime64_any_dtype(dtype):

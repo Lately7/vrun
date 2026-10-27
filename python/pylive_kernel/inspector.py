@@ -11,7 +11,7 @@ import sys
 import types
 from typing import Any
 
-from .heap import HeapEncoder, approx_size, viz_hint
+from .heap import HeapEncoder, approx_size, instance_dict, viz_hint
 from .serialize import encode_scalar, encode_str, type_name
 
 MAX_VARIABLES = 500
@@ -144,7 +144,7 @@ def _fill(info: dict[str, Any], kind: str, value: Any) -> None:
         info["viz"] = viz_hint(value)
         return
     if kind == "estimator":
-        state = object.__getattribute__(value, "__dict__")
+        state = instance_dict(value) or {}
         fitted = [k for k in state if k.endswith("_") and not k.startswith("_")]
         info["fitted"] = bool(fitted)
         info["fittedAttrs"] = fitted[:12]
