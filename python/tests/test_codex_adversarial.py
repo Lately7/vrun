@@ -101,7 +101,7 @@ def test_replacing_and_restoring_sys_stdout_follows_python_semantics(kernel):
     )
 
 
-def test_late_thread_output_keeps_originating_exec_id(kernel):
+def test_late_thread_output_becomes_background_after_new_execution(kernel):
     kernel.run(
         "import threading, time\n"
         "def late_print():\n"
@@ -118,7 +118,7 @@ def test_late_thread_output_keeps_originating_exec_id(kernel):
     ]
 
     assert late_events
-    assert {event.get("execId") for event in late_events} == {"first"}
+    assert {event.get("execId") for event in late_events} == {None}
 
 
 def test_inspect_cyclic_list_and_dict_preserves_back_references(kernel):
@@ -445,20 +445,22 @@ def test_numpy_zero_dimensional_array_inspection_includes_value(kernel):
     assert "7" in json.dumps(payload)
 
 
-def test_numpy_zero_dimensional_object_tuple_is_not_a_structured_record(kernel):
+def test_numpy_zero_dimensional_object_tuple_resolves_through_heap(kernel):
     pytest.importorskip("numpy")
     kernel.run(
         "import numpy as np\n"
         "object_scalar = np.empty((), dtype=object)\n"
-        "object_scalar[()] = (1, 2)"
+        "object_scalar[()] = (1, [2, 3])"
     )
     info = kernel.call("variables.inspect", name="object_scalar")["result"]
     root = info["root"]["ref"]
     value = info["heap"][str(root)]["value"]
-    encoded = json.dumps(value, sort_keys=True)
+    tuple_node = info["heap"][str(value["ref"])]
+    nested_ref = tuple_node["items"][1]["ref"]
+    nested_node = info["heap"][str(nested_ref)]
 
-    assert not (isinstance(value, dict) and value.get("$t") == "record")
-    assert "1" in encoded and "2" in encoded
+    assert tuple_node["kind"] == "tuple" and tuple_node["items"][0] == 1
+    assert nested_node["kind"] == "list" and nested_node["items"] == [2, 3]
 
 
 def test_numpy_structured_array_inspection_preserves_record_values(kernel):
@@ -492,7 +494,7 @@ def test_numpy_nested_structured_array_preserves_nested_field_values(kernel):
     assert all(value in encoded for value in ('1', '2', 'ok'))
 
 
-def test_thread_pool_reuse_attributes_each_job_to_submitting_execution(kernel):
+def test_thread_pool_reuse_becomes_background_after_new_execution(kernel):
     kernel.run(
         "from concurrent.futures import ThreadPoolExecutor\n"
         "pool = ThreadPoolExecutor(max_workers=1)\n"
@@ -510,10 +512,10 @@ def test_thread_pool_reuse_attributes_each_job_to_submitting_execution(kernel):
     ]
 
     assert events
-    assert {event.get("execId") for event in events} == {"pool-second"}
+    assert {event.get("execId") for event in events} == {None}
 
 
-def test_raw_thread_output_keeps_originating_exec_id(kernel):
+def test_raw_thread_output_is_background(kernel):
     before = len(kernel.events)
     kernel.run(
         "import _thread, threading\n"
@@ -531,10 +533,10 @@ def test_raw_thread_output_keeps_originating_exec_id(kernel):
     ]
 
     assert events
-    assert {event.get("execId") for event in events} == {"raw-origin"}
+    assert {event.get("execId") for event in events} == {None}
 
 
-def test_thread_subclass_overriding_start_keeps_originating_exec_id(kernel):
+def test_thread_subclass_overriding_start_output_is_background(kernel):
     before = len(kernel.events)
     kernel.run(
         "import _thread, threading\n"
@@ -555,7 +557,77 @@ def test_thread_subclass_overriding_start_keeps_originating_exec_id(kernel):
     ]
 
     assert events
-    assert {event.get("execId") for event in events} == {"subclass-origin"}
+    assert {event.get("execId") for event in events} == {None}
+
+
+def test_stale_background_parent_cannot_label_child_as_newer_execution(kernel):
+    kernel.run(
+        "import threading, time\n"
+        "stale_child_done = threading.Event()\n"
+        "def stale_parent():\n"
+        "    time.sleep(0.5)\n"
+        "    def stale_child():\n"
+        "        print('child-of-stale-parent')\n"
+        "        stale_child_done.set()\n"
+        "    threading.Thread(target=stale_child, daemon=True).start()\n"
+        "threading.Thread(target=stale_parent, daemon=True).start()",
+        execId="old-execution",
+    )
+    kernel.run("newer_execution_finished = True", execId="newer-execution")
+    time.sleep(1.0)
+    # This task does not advance the execution sequence, but guarantees that
+    # any small background-output buffer is flushed before assertions.
+    kernel.call("variables.list")
+    events = [
+        event for event in kernel.events
+        if event.get("event") == "stream" and "child-of-stale-parent" in event.get("text", "")
+    ]
+
+    assert events
+    assert {event.get("execId") for event in events} == {None}
+
+
+def test_dataframe_object_cell_does_not_read_user_class_property(kernel):
+    pytest.importorskip("pandas")
+    kernel.run(
+        "import pandas as pd\n"
+        "cell_class_reads = 0\n"
+        "class ClassTrap:\n"
+        "    @property\n"
+        "    def __class__(self):\n"
+        "        global cell_class_reads\n"
+        "        cell_class_reads += 1\n"
+        "        return object\n"
+        "trapped_cell = ClassTrap()\n"
+        "class_trap_df = pd.DataFrame({'value': pd.Series([trapped_cell], dtype=object)})\n"
+        "cell_class_reads = 0"
+    )
+    page = kernel.call("dataframe.page", name="class_trap_df", offset=0, limit=1)
+    reads = kernel.run("cell_class_reads")["value"]["repr"]
+
+    assert page["ok"] is True
+    assert reads == "0"
+
+
+def test_expression_result_does_not_read_metaclass_module_property(kernel):
+    result = kernel.run(
+        "result_module_reads = 0\n"
+        "class ResultMeta(type):\n"
+        "    @property\n"
+        "    def __module__(cls):\n"
+        "        global result_module_reads\n"
+        "        result_module_reads += 1\n"
+        "        return '__main__'\n"
+        "class ResultVictim(metaclass=ResultMeta):\n"
+        "    pass\n"
+        "result_victim = ResultVictim()\n"
+        "result_module_reads = 0\n"
+        "result_victim"
+    )
+    reads = kernel.run("result_module_reads")["value"]["repr"]
+
+    assert result["status"] == "ok"
+    assert reads == "0"
 
 
 def test_os_exit_inside_trace_terminates_worker_without_hanging(kernel):

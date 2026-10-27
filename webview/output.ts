@@ -22,6 +22,7 @@ interface Block {
 
 const MAX_BLOCKS = 60;
 const MAX_STDOUT_CHARS = 400_000;
+const BACKGROUND_ID = -1;
 
 export class OutputView {
   readonly el = h('div', { class: 'output' });
@@ -67,9 +68,9 @@ export class OutputView {
   }
 
   stream(execId: number | null | undefined, name: string, text: string): void {
-    const b = execId !== null && execId !== undefined ? this.blocks.get(execId) : undefined;
-    const target = b ?? this.latest();
-    if (!target) return;
+    // Output the kernel could not attribute (background threads, evicted
+    // runs) gets its own block instead of being mixed into the latest run.
+    const target = (execId !== null && execId !== undefined ? this.blocks.get(execId) : undefined) ?? this.backgroundBlock();
     const span = h('span', { class: name === 'stderr' ? 'stderr' : '' }, text);
     target.stdout.appendChild(span);
     const size = target.stdout.textContent?.length ?? 0;
@@ -91,10 +92,15 @@ export class OutputView {
     }
   }
 
-  private latest(): Block | undefined {
-    let last: Block | undefined;
-    for (const b of this.blocks.values()) last = b;
-    return last;
+  private backgroundBlock(): Block {
+    let b = this.blocks.get(BACKGROUND_ID);
+    if (!b) {
+      this.start(BACKGROUND_ID, 'Background output (threads started by earlier runs)', 'background');
+      b = this.blocks.get(BACKGROUND_ID)!;
+      clear(b.status);
+      b.status.append(h('span', { class: 'muted' }, 'not tied to a single run'));
+    }
+    return b;
   }
 
   end(execId: number, result: ExecResult | undefined, failure?: { code: string; message: string }, cancelled = false, superseded = false): void {

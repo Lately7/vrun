@@ -218,6 +218,7 @@ class Worker:
         self.current: Task | None = None
         self.interrupt_reason: str | None = None
         self.current_exec_id: Any = None
+        self.exec_seq = 0  # bumped by every execute/trace; see exec_id_for_current_thread
         self.execution_count = 0
         self.output_bytes = 0
         self.output_truncated = False
@@ -242,7 +243,7 @@ class Worker:
         worker = self
 
         def start(thread: threading.Thread) -> None:
-            thread._pylive_exec_id = worker.current_exec_id  # type: ignore[attr-defined]
+            thread._pylive_exec = (worker.exec_seq, worker.current_exec_id)  # type: ignore[attr-defined]
             original_start(thread)
 
         threading.Thread.start = start  # type: ignore[method-assign]
@@ -253,10 +254,21 @@ class Worker:
         executor.silence_agg_show_warning()
 
     def exec_id_for_current_thread(self) -> Any:
+        """Execution that output of the calling thread belongs to.
+
+        Invariant: never a wrong execution. A background thread is attributed
+        to the execution that started it only until a newer execution starts
+        (a reused pool thread may run jobs of later executions); after that,
+        and for threads created without Thread.start, the answer is None
+        ("background output").
+        """
         t = threading.current_thread()
         if t is threading.main_thread():
             return self.current_exec_id
-        return getattr(t, "_pylive_exec_id", None)
+        origin = getattr(t, "_pylive_exec", None)
+        if origin is not None and origin[0] == self.exec_seq:
+            return origin[1]
+        return None
 
     # -- reader thread -----------------------------------------------------
     def reader(self) -> None:
@@ -334,8 +346,17 @@ class Worker:
             return True
 
     # -- main thread -------------------------------------------------------
+    def _flush_loop(self) -> None:
+        # Writes are batched; without this, text printed by a background
+        # thread after its execution ended would wait for the next execution.
+        while True:
+            time.sleep(STREAM_FLUSH_SECONDS * 2)
+            for s in (self.capture_out, self.capture_err):
+                s.flush()
+
     def serve_forever(self) -> None:
         threading.Thread(target=self.reader, name="pylive-reader", daemon=True).start()
+        threading.Thread(target=self._flush_loop, name="pylive-flush", daemon=True).start()
         self.writer.send({"type": "event", "event": "ready", "session": self.session,
                           "pid": os.getpid(), "python": inspector.python_info(),
                           "cwd": os.getcwd()})
@@ -460,6 +481,7 @@ class Worker:
         if mode not in ("manual", "live"):
             raise RequestError("bad_request", "mode must be 'manual' or 'live'")
         self.current_exec_id = p.get("execId")
+        self.exec_seq += 1
         self.output_bytes = 0
         self.output_truncated = False
 
@@ -518,6 +540,7 @@ class Worker:
     def h_trace(self, p: dict[str, Any]) -> dict[str, Any]:
         code = _str(p.get("code"), "code", 200_000)
         self.current_exec_id = p.get("execId")
+        self.exec_seq += 1
         if p.get("mode") == "live":
             analysis = safety.analyze_source(code)
             if not analysis["safe"]:

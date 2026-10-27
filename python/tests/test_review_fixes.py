@@ -67,9 +67,22 @@ def test_trace_does_not_capture_background_thread_output(kernel):
     assert "from-background" not in res["stdout"]
     assert "traced" in res["stdout"]
     time.sleep(0.2)
-    assert "from-background" in _stream(kernel, "bg-start")
+    # A newer request (the trace) started meanwhile, so the kernel cannot be
+    # sure which run the text belongs to: it is reported as background (None),
+    # never as the trace's output.
+    assert "from-background" in _stream(kernel, None)
     # The persistent __main__ is untouched by tracing.
     assert kernel.run("import sys\nsys.modules['__main__'].__dict__ is globals()")["value"]["repr"] == "True"
+
+
+def test_background_output_while_its_run_is_latest_keeps_exec_id(kernel):
+    kernel.run(
+        "import threading, time\n"
+        "threading.Thread(target=lambda: (time.sleep(0.2), print('mine')), daemon=True).start()",
+        execId="owner",
+    )
+    time.sleep(0.5)  # no newer execution started
+    assert "mine" in _stream(kernel, "owner")
 
 
 def test_zero_dim_and_structured_arrays(kernel):
