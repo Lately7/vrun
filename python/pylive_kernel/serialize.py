@@ -112,29 +112,30 @@ def encode_scalar(v: object, max_str: int = DEFAULT_MAX_STR) -> JsonValue:
     if _is_pandas(t):
         return _encode_pandas_scalar(v)
 
-    if isinstance(v, bool):
-        return bool(v)
-    if isinstance(v, int):
-        return encode_int(int(v))
-    if isinstance(v, float):
-        return encode_float(float(v))
-    if isinstance(v, str):
-        return encode_str(str.__str__(v), max_str)
-    if isinstance(v, complex):
-        return _tag("complex", f"{v.real!r}{v.imag:+}j")
-    if isinstance(v, _dt.datetime):
-        return _tag("dt", v.isoformat())
-    if isinstance(v, _dt.date):
-        return _tag("date", v.isoformat())
-    if isinstance(v, _dt.time):
-        return _tag("time", v.isoformat())
-    if isinstance(v, _dt.timedelta):
+    # Subclasses: issubclass(t, ...) (isinstance would consult a user-defined
+    # __class__) and the *base* class's C methods, never the subclass's
+    # possibly overridden __int__/__float__/isoformat/__getitem__.
+    if issubclass(t, int):
+        return encode_int(int.__int__(v))  # type: ignore[arg-type]
+    if issubclass(t, float):
+        return encode_float(float.__float__(v))  # type: ignore[arg-type]
+    if issubclass(t, str):
+        return encode_str(str.__str__(v), max_str)  # type: ignore[arg-type]
+    if t is complex:
+        return _tag("complex", f"{v.real!r}{v.imag:+}j")  # type: ignore[attr-defined]
+    if t is _dt.datetime:
+        return _tag("dt", v.isoformat())  # type: ignore[attr-defined]
+    if t is _dt.date:
+        return _tag("date", v.isoformat())  # type: ignore[attr-defined]
+    if t is _dt.time:
+        return _tag("time", v.isoformat())  # type: ignore[attr-defined]
+    if t is _dt.timedelta:
         return _tag("td", str(v))
-    if isinstance(v, decimal.Decimal):
+    if t is decimal.Decimal:
         return _tag("dec", str(v)[:max_str])
-    if isinstance(v, (bytes, bytearray)):
-        head = bytes(v[:32]).hex()
-        return _tag("bytes", head, len=len(v))
+    if t is bytes or t is bytearray:
+        head = bytes(v[:32]).hex()  # type: ignore[index]
+        return _tag("bytes", head, len=len(v))  # type: ignore[arg-type]
     return _tag("obj", None, type=type_name(v))
 
 

@@ -243,7 +243,10 @@ class Worker:
         worker = self
 
         def start(thread: threading.Thread) -> None:
-            thread._pylive_exec = (worker.exec_seq, worker.current_exec_id)  # type: ignore[attr-defined]
+            # Inherit the *starting thread's* owner: a stale background thread
+            # that spawns a child must not hand it the newest execution's id.
+            owner = worker.exec_id_for_current_thread()
+            thread._pylive_exec = (worker.exec_seq, owner)  # type: ignore[attr-defined]
             original_start(thread)
 
         threading.Thread.start = start  # type: ignore[method-assign]

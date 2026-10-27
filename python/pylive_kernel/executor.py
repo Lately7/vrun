@@ -13,7 +13,7 @@ import types
 import warnings
 from typing import Any
 
-from .serialize import safe_repr, short_type_name, type_name
+from .serialize import safe_repr, short_type_name, type_module, type_name, type_qualname
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_FIGURES = 8
@@ -117,9 +117,10 @@ def describe_result(value: object) -> dict[str, Any]:
         "repr": safe_repr(value, 4000),
     }
     t = type(value)
-    if t.__module__.startswith("pandas") and t.__name__ in ("DataFrame", "Series"):
+    name = type_qualname(t)
+    if type_module(t).startswith("pandas") and name in ("DataFrame", "Series"):
         info["shape"] = list(getattr(value, "shape", ()))
-        info["dataframe"] = t.__name__ == "DataFrame"
+        info["dataframe"] = name == "DataFrame"
     else:
         try:
             info["viz"] = viz_hint(value)
