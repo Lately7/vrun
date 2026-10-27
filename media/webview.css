@@ -178,7 +178,8 @@ ol.code li.prev { background: var(--vscode-editor-inactiveSelectionBackground); 
 .frame.top { border-left-color: var(--accent); }
 .frame-name { font-family: var(--vscode-editor-font-family); font-weight: 600; }
 
-svg.viz-svg { display: block; max-width: none; }
+/* Scale drawings down to the card width; never up. */
+svg.viz-svg { display: block; max-width: 100%; height: auto; }
 svg text { fill: var(--vscode-foreground); font-family: var(--vscode-editor-font-family); font-size: 12px; }
 svg .muted-text, svg .index-text, svg .tick-text { fill: var(--muted); font-size: 10px; }
 svg .cell-text.small { font-size: 9px; }

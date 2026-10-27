@@ -3,15 +3,18 @@ import { h } from '../dom';
 import { Encoded, Heap, numeric } from '../format';
 import { Var, isPointerName, sameEncoded, shortScalar } from './common';
 
-const ROW_NAMES = /^(i|r|row|y|a|x1)$/i;
-const COL_NAMES = /^(j|c|col|x|b|y1|w|cap)$/i;
+// Most specific names first: `w` (current capacity) beats `cap` (the limit).
+const ROW_PREF = ['i', 'r', 'row', 'y', 'a'];
+const COL_PREF = ['j', 'c', 'col', 'w', 'x', 'b', 'cap'];
 
 export function renderMatrix(name: string, rows: Encoded[][], prev: Encoded[][] | undefined, vars: Var[], heap: Heap): HTMLElement {
   const ints = vars.filter(
     (v) => typeof v.value === 'number' && Number.isInteger(v.value) && (isPointerName(v.name) || /^(w|cap|a|b)$/i.test(v.name)),
   );
-  const rowVar = ints.find((v) => ROW_NAMES.test(v.name));
-  const colVar = ints.find((v) => COL_NAMES.test(v.name) && v !== rowVar);
+  const byPreference = (names: string[], exclude?: Var) =>
+    names.map((n) => ints.find((v) => v.name.toLowerCase() === n && v !== exclude)).find((v) => v !== undefined);
+  const rowVar = byPreference(ROW_PREF);
+  const colVar = byPreference(COL_PREF, rowVar);
   const ri = typeof rowVar?.value === 'number' ? rowVar.value : -1;
   const ci = typeof colVar?.value === 'number' ? colVar.value : -1;
   let lo = Infinity;

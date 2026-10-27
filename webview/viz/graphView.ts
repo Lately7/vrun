@@ -9,7 +9,8 @@ import { Var, node, shortScalar } from './common';
 
 const VISITED = /^(visited|seen|done|closed|explored|marked)$/i;
 const FRONTIER = /^(queue|q|stack|st|frontier|open|open_set|heap|pq|dq|to_visit|todo)$/i;
-const PATH = /^(path|order|result|res|topo|ordering|cycle)$/i;
+// Only consecutive-vertex sequences: a BFS `order` is not a path.
+const PATH = /^(path|best_path|shortest_path|cycle)$/i;
 const CURRENT = /^(node|u|v|cur|curr|current|vertex|n|nxt|next_node|neighbor|nei|w)$/i;
 const DIST = /^(dist|distance|distances|d|cost|costs|level|depth|parent|prev)$/i;
 
@@ -95,6 +96,12 @@ export function renderGraph(name: string, g: HeapNode, heap: Heap, vars: Var[]):
   const visited = collectMembers(vars, heap, VISITED);
   const frontier = collectMembers(vars, heap, FRONTIER);
   const onPath = collectMembers(vars, heap, PATH);
+  const pathPairs = new Set<string>();
+  for (const v of vars) {
+    if (!PATH.test(v.name)) continue;
+    const seq = (node(heap, v.value)?.items ?? []).map((it) => key(it, heap));
+    for (let i = 0; i + 1 < seq.length; i++) pathPairs.add(`${seq[i]}\u0000${seq[i + 1]}`);
+  }
   const current = new Set<string>();
   for (const v of vars) if (CURRENT.test(v.name) && !isRef(v.value)) current.add(shortScalar(v.value, heap));
   const distVar = vars.find((v) => DIST.test(v.name) && node(heap, v.value)?.kind === 'dict');
@@ -140,7 +147,7 @@ export function renderGraph(name: string, g: HeapNode, heap: Heap, vars: Var[]):
     const sy = y1 + (dy / len) * NR;
     const ex = x2 - (dx / len) * (NR + 2);
     const ey = y2 - (dy / len) * (NR + 2);
-    const hot = onPath.has(e.from) && onPath.has(e.to);
+    const hot = pathPairs.has(`${e.from}\u0000${e.to}`) || (und && pathPairs.has(`${e.to}\u0000${e.from}`));
     svg.appendChild(s('line', { x1: sx, y1: sy, x2: ex, y2: ey, class: `edge ${hot ? 'hot' : ''}`, 'marker-end': und ? undefined : 'url(#arrow)' }));
     if (e.weight !== undefined) {
       svg.appendChild(s('text', { x: (sx + ex) / 2, y: (sy + ey) / 2 - 4, 'text-anchor': 'middle', class: 'edge-label' }, e.weight));

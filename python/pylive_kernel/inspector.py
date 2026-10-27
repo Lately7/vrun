@@ -46,7 +46,9 @@ def _kind(value: object) -> str:
     if mod == "numpy" and t.__name__ == "ndarray":
         return "ndarray"
     if mod.startswith("numpy"):
-        return "number"
+        np = sys.modules.get("numpy")
+        if np is not None and isinstance(value, np.generic):
+            return "bool" if isinstance(value, np.bool_) else "number"
     if _is_sklearn_estimator(value):
         return "estimator"
     if isinstance(value, type):

@@ -8,3 +8,6 @@ __pycache__/
 .vscode-test/
 benchmarks/data/
 
+media/*.map
+dev/
+.claude/
