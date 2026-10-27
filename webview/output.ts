@@ -18,6 +18,8 @@ interface Block {
   stdout: HTMLElement;
   status: HTMLElement;
   body: HTMLElement;
+  file: string;
+  done: boolean;
 }
 
 const MAX_BLOCKS = 60;
@@ -45,22 +47,23 @@ export class OutputView {
     this.onError(0);
   }
 
-  start(execId: number, label: string, mode: string): void {
+  start(execId: number, label: string, mode: string, file = ''): void {
     const status = h('span', { class: 'run-status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), mode === 'live' ? 'live…' : 'running…');
     const stdout = h('pre', { class: 'console' });
     const body = h('div', {});
-    const el = h('div', { class: `run ${mode}` }, h('div', { class: 'run-head' }, h('span', { class: 'run-label' }, label), status), stdout, body);
+    const el = h('div', { class: `run ${mode}` }, h('div', { class: 'run-head' }, h('span', { class: 'run-label' }, file ? `${file} · ${label}` : label), status), stdout, body);
     this.list.prepend(el);
-    this.blocks.set(execId, { el, stdout, status, body });
+    this.blocks.set(execId, { el, stdout, status, body, file, done: false });
     while (this.list.childElementCount > MAX_BLOCKS) {
       const oldest = this.list.lastElementChild;
       oldest?.remove();
       // Drop the map entry too, or evicted blocks (and their output) leak.
       for (const [id, b] of this.blocks) if (b.el === oldest) this.blocks.delete(id);
     }
-    // Old live runs are noise: keep only the latest live block.
+    // Old live runs are noise: keep only the latest finished live block of
+    // the same file (other files' blocks and runs still in flight stay).
     if (mode === 'live') {
-      for (const [id, b] of this.blocks) if (id !== execId && b.el.classList.contains('live') && !b.el.classList.contains('error')) {
+      for (const [id, b] of this.blocks) if (id !== execId && b.done && b.file === file && b.el.classList.contains('live') && !b.el.classList.contains('error')) {
         b.el.remove();
         this.blocks.delete(id);
       }
@@ -106,6 +109,7 @@ export class OutputView {
   end(execId: number, result: ExecResult | undefined, failure?: { code: string; message: string }, cancelled = false, superseded = false): void {
     const b = this.blocks.get(execId);
     if (!b) return;
+    b.done = true;
     if (superseded) {
       // A newer live run replaced this one; its result is intentionally dropped.
       b.el.remove();
@@ -135,7 +139,8 @@ export class OutputView {
     if (result.value) {
       const v = result.value;
       const valueBox = h('div', { class: 'result' }, h('div', { class: 'muted' }, v.shape ? `${v.shortType} ${v.shape.join(' × ')}` : v.shortType), h('pre', { class: 'console value' }, v.repr));
-      if (v.dataframe !== undefined) valueBox.appendChild(button('Open result (_) in DataFrame viewer', () => this.openDataFrame('_')));
+      // `dataframe` is false for a Series, which the viewer shows too.
+      if (v.dataframe !== undefined) valueBox.appendChild(button(`Open result (_) in the ${v.dataframe ? 'DataFrame' : 'Series'} viewer`, () => this.openDataFrame('_')));
       b.body.appendChild(valueBox);
     }
     for (const f of result.figures ?? []) {

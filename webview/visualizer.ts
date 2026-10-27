@@ -78,7 +78,8 @@ export class Visualizer {
     this.renderStatus();
   }
 
-  failed(message: string): void {
+  failed(execId: number, message: string): void {
+    if (execId < this.latestExecId) return; // a newer trace is in charge
     this.stop(); // the playback timer would otherwise keep firing
     this.busy = '';
     this.trace = undefined;
@@ -86,7 +87,8 @@ export class Visualizer {
     this.render(message);
   }
 
-  setTrace(result: TraceResult, label: string, mode: string, lineOffset: number): void {
+  setTrace(execId: number, result: TraceResult, label: string, mode: string, lineOffset: number): void {
+    if (execId < this.latestExecId) return; // an older trace finished after a newer one started
     this.busy = '';
     this.snapshot = undefined;
     const keep = mode === 'live' && this.trace !== undefined;

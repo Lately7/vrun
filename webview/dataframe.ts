@@ -127,6 +127,9 @@ export class DataFrameView {
   private async loadPage(): Promise<void> {
     if (!this.meta) return;
     const my = ++this.seq;
+    // Selection is a position in the current page; a new page invalidates it
+    // (otherwise "Copy cell" would copy whatever now sits at that position).
+    this.selected = undefined;
     this.loading = this.sort || this.filter ? 'Sorting / filtering the full DataFrame in the kernel…' : 'Loading rows…';
     this.render();
     try {

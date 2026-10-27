@@ -63,12 +63,21 @@ export function hasCellMarkers(source: string): boolean {
  */
 export function dedent(text: string): string {
   const lines = text.split(/\r?\n/);
-  let indent: number | undefined;
+  // Common whitespace *prefix* (like textwrap.dedent): a tab and four spaces
+  // are different indentation and must not be cut by character count.
+  let prefix: string | undefined;
   for (const l of lines) {
     if (!l.trim()) continue;
-    const n = l.length - l.trimStart().length;
-    indent = indent === undefined ? n : Math.min(indent, n);
+    const ws = l.slice(0, l.length - l.trimStart().length);
+    if (prefix === undefined) {
+      prefix = ws;
+    } else {
+      let i = 0;
+      while (i < prefix.length && i < ws.length && prefix[i] === ws[i]) i++;
+      prefix = prefix.slice(0, i);
+    }
   }
-  if (!indent) return lines.join('\n');
-  return lines.map((l) => (l.trim() ? l.slice(indent) : '')).join('\n');
+  if (!prefix) return lines.join('\n');
+  const cut = prefix.length;
+  return lines.map((l) => (l.trim() ? l.slice(cut) : '')).join('\n');
 }

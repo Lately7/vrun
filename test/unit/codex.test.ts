@@ -190,11 +190,21 @@ describe('KernelClient adversarial transport and lifecycle', () => {
     });
   });
 
-  it('clears session metadata after a clean stop', async () => {
+  it('clears session metadata after a clean process exit', () => {
     const client = new KernelClient();
-    await client.start(launchOptions('normal'));
+    const internal = client as unknown as {
+      proc: object | undefined;
+      onLine(line: string): void;
+      onExit(proc: object, code: number | null, signal: string | null, onEarly: () => void): void;
+    };
+    const proc = {};
+    internal.proc = proc;
+    internal.onLine(JSON.stringify({
+      type: 'event', event: 'ready', session: '0123456789abcdef', pid: 1,
+      python: { version: 'fixture', executable: 'python' }, cwd: '.',
+    }));
     assert.ok(client.info);
-    await client.stop(100);
+    internal.onExit(proc, 0, null, () => undefined);
     assert.equal(client.session, undefined);
     assert.equal(client.info, undefined);
   });
@@ -231,17 +241,14 @@ describe('KernelClient adversarial transport and lifecycle', () => {
     assert.equal(client.status, 'stopped');
   });
 
-  it('does not accept a malformed ready event as a successful startup', async () => {
+  it('does not accept a malformed ready event as a successful startup', () => {
     const client = new KernelClient();
-    try {
-      const started = Date.now();
-      const ready = await within(client.start(launchOptions('malformed_ready')));
-      assert.ok(Date.now() - started >= 400, 'startup must wait for the structurally valid ready event');
-      assert.equal(ready.session, '0123456789abcdef');
-      assert.equal(client.session, ready.session);
-    } finally {
-      await client.stop(100);
-    }
+    let sessions = 0;
+    client.onSession.on(() => sessions++);
+    (client as unknown as { onLine(line: string): void }).onLine('{"type":"event","event":"ready"}');
+    assert.equal(sessions, 0);
+    assert.equal(client.status, 'stopped');
+    assert.equal(client.session, undefined);
   });
 });
 

@@ -12,6 +12,7 @@ import {
   RequestType,
   StreamEvent,
   WorkerMessage,
+  isReadyEvent,
   parseWorkerLine,
 } from './protocol';
 
@@ -157,6 +158,7 @@ export class KernelClient {
     clearTimeout(this.interruptTimer);
     const wasReady = this._session !== undefined;
     this._session = undefined;
+    this._info = undefined; // a stopped kernel must not advertise its old session
     const err = new KernelRequestError(
       'kernel_exited',
       this.stopping ? 'Kernel stopped' : `Kernel process exited unexpectedly (code ${code}, signal ${signal})`,
@@ -191,7 +193,11 @@ export class KernelClient {
     }
     if (msg.type === 'event') {
       if (msg.event === 'ready') {
-        const ready = msg as ReadyEvent;
+        if (!isReadyEvent(msg)) {
+          this.onLog.fire('[pylive] ignored malformed ready event\n');
+          return;
+        }
+        const ready = msg;
         this._session = ready.session;
         this._info = ready;
         this.setStatus('idle');

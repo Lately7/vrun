@@ -182,6 +182,24 @@ export class KernelRequestError extends Error {
   }
 }
 
+/** A ready event starts a session, so every field is checked, not just the tag. */
+export function isReadyEvent(msg: EventMessage): msg is ReadyEvent {
+  const m = msg as Record<string, unknown>;
+  const py = m.python as Record<string, unknown> | undefined;
+  return (
+    m.event === 'ready' &&
+    typeof m.session === 'string' &&
+    /^[0-9a-f]{16}$/.test(m.session) &&
+    typeof m.pid === 'number' &&
+    Number.isInteger(m.pid) &&
+    typeof m.cwd === 'string' &&
+    typeof py === 'object' &&
+    py !== null &&
+    typeof py.version === 'string' &&
+    typeof py.executable === 'string'
+  );
+}
+
 /** Validates the outer shape of a line received from the worker. */
 export function parseWorkerLine(line: string): WorkerMessage | undefined {
   let msg: unknown;

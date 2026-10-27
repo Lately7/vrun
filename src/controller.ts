@@ -80,6 +80,8 @@ export class PyLiveController implements vscode.Disposable {
       this.panel,
       vscode.workspace.onDidChangeTextDocument((e) => this.onDocumentChanged(e)),
       vscode.window.onDidChangeVisibleTextEditors((eds) => eds.forEach((ed) => this.decorations.refreshEditor(ed))),
+      // The Live buttons show the state of the *active* document.
+      vscode.window.onDidChangeActiveTextEditor(() => this.postLiveState()),
       vscode.workspace.onDidCloseTextDocument((d) => this.disableLive(d.uri.toString())),
     );
   }
@@ -358,6 +360,13 @@ export class PyLiveController implements vscode.Disposable {
     this.panel.post({ type: 'liveState', live: this.liveDocs.has(key), liveViz: this.liveVizDocs.has(key) });
   }
 
+  private postLiveState(): void {
+    const doc = vscode.window.activeTextEditor?.document;
+    if (!doc || doc.languageId !== 'python') return; // keep the last Python file's state while the panel has focus
+    const key = doc.uri.toString();
+    this.panel.post({ type: 'liveState', live: this.liveDocs.has(key), liveViz: this.liveVizDocs.has(key) });
+  }
+
   private disableLive(key: string): void {
     this.liveDocs.delete(key);
     this.liveVizDocs.delete(key);
@@ -390,8 +399,12 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   private async runLive(doc: vscode.TextDocument, key: string, gen: number): Promise<void> {
-    // Never compete with a manual run: live work waits for the next edit.
-    if (this.manualRunning > 0) return;
+    // Never compete with a manual run: try again after another debounce
+    // period instead of dropping the edit.
+    if (this.manualRunning > 0) {
+      if (this.scheduler.isCurrent(key, gen)) this.scheduler.schedule(key, (g) => this.runLive(doc, key, g));
+      return;
+    }
     for (const cell of this.liveTargets(doc)) {
       if (!this.scheduler.isCurrent(key, gen)) return;
       const r = await this.runCode(doc, cell.text, cell.startLine, 'live', `live: line ${cell.startLine + 1}`, cell.endLine, () =>
@@ -527,6 +540,7 @@ export class PyLiveController implements vscode.Disposable {
           this.panel.post({ type: 'session', session: i.session, python: i.python, cwd: i.cwd, pid: i.pid });
         }
         if (this.lastVariables) this.panel.post({ type: 'variables', list: this.lastVariables });
+        this.postLiveState();
         return;
       case 'command':
         await vscode.commands.executeCommand(`pylive.${msg.command === 'start' ? 'startKernel' : msg.command === 'restart' ? 'restartKernel' : msg.command === 'stop' ? 'stopKernel' : msg.command}`);

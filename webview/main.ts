@@ -14,8 +14,9 @@ const TABS: Array<[Tab, string]> = [
   ['visualizer', 'Visualizer (DSA)'],
 ];
 
-const saved = (vscode.getState() as { tab?: Tab } | undefined) ?? {};
-let tab: Tab = saved.tab ?? 'variables';
+// Persisted state may come from an older version: validate before use.
+const saved = vscode.getState() as { tab?: unknown } | undefined;
+let tab: Tab = TABS.some(([id]) => id === saved?.tab) ? (saved!.tab as Tab) : 'variables';
 let status = 'stopped';
 let python = '';
 let frames: string[] = [];
@@ -143,7 +144,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
       variables.error(msg.message);
       break;
     case 'execStart':
-      output.start(msg.execId, msg.label, msg.mode);
+      output.start(msg.execId, msg.label, msg.mode, msg.file);
       break;
     case 'execEnd':
       output.end(msg.execId, msg.result, msg.failure, msg.cancelled, msg.superseded);
@@ -165,11 +166,11 @@ window.addEventListener('message', (ev: MessageEvent) => {
       visualizer.superseded(msg.execId);
       break;
     case 'trace':
-      visualizer.setTrace(msg.result, msg.label, msg.mode, msg.lineOffset);
+      visualizer.setTrace(msg.execId, msg.result, msg.label, msg.mode, msg.lineOffset);
       if (msg.mode === 'manual') showTab('visualizer');
       break;
     case 'traceFailed':
-      visualizer.failed(`${msg.code}: ${msg.message}`);
+      visualizer.failed(msg.execId, `${msg.code}: ${msg.message}`);
       break;
     case 'liveState':
       live = !!msg.live;
