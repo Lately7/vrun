@@ -69,7 +69,7 @@ def main() -> None:
 
 
 HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>PyLive webview harness</title>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PyLive webview harness</title>
 <link rel="stylesheet" href="../media/webview.css">
 <style>
  :root { --vscode-foreground:#cccccc; --vscode-editor-background:#1e1e1e; --vscode-descriptionForeground:#9d9d9d;
@@ -89,15 +89,29 @@ HTML = """<!DOCTYPE html>
 <script src="harness-data.js"></script>
 <script>
 const H = window.HARNESS;
+const features = new URLSearchParams(location.search).has('features');
 function post(m) { window.postMessage(m, '*'); }
 window.acquireVsCodeApi = () => ({
   getState: () => undefined, setState: () => {},
   postMessage(m) {
     const reply = (result) => setTimeout(() => post({ type: 'response', requestId: m.requestId, ok: true, result }), 30);
     if (m.type === 'ready') {
+      post({ type: 'features', visualizer: features, dataframe: features });
       post({ type: 'status', status: 'idle', workload: 0 });
       post({ type: 'session', session: H.session, python: { version: '3.15.1' } });
       post({ type: 'variables', list: H.ready });
+      // A few runs like a real session: repeated file runs, one error.
+      for (let i = 1; i <= 4; i++) {
+        post({ type: 'execStart', execId: i, label: '', mode: 'manual', file: 'test.py', docKey: 'test.py' });
+        post({ type: 'stream', execId: i, name: 'stdout', text: '30' + String.fromCharCode(10) });
+        post({ type: 'execEnd', execId: i, result: { status: 'ok', executionCount: i, elapsedMs: 0.02 } });
+      }
+      post({ type: 'execStart', execId: 5, label: 'cell · line 3', mode: 'manual', file: 'test.py', docKey: 'test.py' });
+      post({ type: 'execEnd', execId: 5, result: { status: 'error', executionCount: 5, elapsedMs: 0.4,
+        error: { ename: 'NameError', evalue: "name 'c' is not defined", traceback: ['Traceback (most recent call last):', '  File "test.py", line 4, in <module>', '    print(c)', "NameError: name 'c' is not defined"].join(String.fromCharCode(10)) } } });
+      post({ type: 'execStart', execId: 6, label: '', mode: 'manual', file: 'test.py', docKey: 'test.py' });
+      post({ type: 'execEnd', execId: 6, result: { status: 'ok', executionCount: 6, elapsedMs: 3.1,
+        value: { type: 'int', shortType: 'int', repr: '30' } } });
     } else if (m.type === 'dfMetadata') reply(H.meta);
     else if (m.type === 'dfPage') reply(Object.assign({}, H.page, { offset: m.offset }));
     else if (m.type === 'dfSummary') reply(H.summary);

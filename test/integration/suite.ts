@@ -1,5 +1,6 @@
 /** Integration tests executed inside the Extension Development Host. */
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Mocha from 'mocha';
 import * as vscode from 'vscode';
@@ -18,12 +19,23 @@ async function waitFor<T>(fn: () => T | undefined | Promise<T | undefined>, time
   throw new Error(`timed out waiting for ${what}`);
 }
 
+/** Put keyboard focus in the inspector webview (it opens beside the editor). */
+async function focusPanel(): Promise<void> {
+  await vscode.commands.executeCommand('pylive.openVariables');
+  const isPanel = () => vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputWebview;
+  await waitFor(() => isPanel(), 5000, 'webview tab to become the active tab');
+}
+
 function tests(): void {
   let c: PyLiveController;
   const ws = process.env.PYLIVE_IT_WORKSPACE!;
 
   suiteSetup(async () => {
-    await vscode.workspace.getConfiguration('pylive').update('pythonPath', process.env.PYLIVE_PYTHON, vscode.ConfigurationTarget.Global);
+    const config = vscode.workspace.getConfiguration('pylive');
+    await config.update('pythonPath', process.env.PYLIVE_PYTHON, vscode.ConfigurationTarget.Global);
+    // Opt-in panels used by the tests below.
+    await config.update('features.visualizer', true, vscode.ConfigurationTarget.Global);
+    await config.update('features.dataframe', true, vscode.ConfigurationTarget.Global);
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === 'pylive-inspector');
     assert.ok(ext, 'extension is installed in the dev host');
     c = (await ext.activate()) as PyLiveController;
@@ -81,6 +93,34 @@ function tests(): void {
     await vscode.commands.executeCommand('pylive.visualize');
     const after = await c.kernel.request<VariablesList>('variables.list');
     assert.equal(after.revision, before.revision);
+  });
+
+  test('Live Mode works when toggled from the inspector panel (editor not focused)', async () => {
+    const file = path.join(ws, 'live_demo.py');
+    fs.writeFileSync(file, 'live_value = 1\n');
+    const doc = await vscode.workspace.openTextDocument(file);
+    const editor = await vscode.window.showTextDocument(doc);
+    // The user clicks the Live button in the inspector, so the webview tab is
+    // active. (VS Code still reports the visible Python editor as active;
+    // the button -> command mapping itself is covered by a unit test.)
+    await focusPanel();
+    await vscode.commands.executeCommand('pylive.toggleLiveMode');
+    assert.equal(c.liveState(doc.uri).live, true, 'Live Mode must turn on for the last Python editor');
+    // Editing re-runs the cell automatically after the debounce.
+    await editor.edit((e) => e.replace(new vscode.Range(0, 0, 0, doc.lineAt(0).text.length), 'live_value = 41 + 1'));
+    await waitFor(async () => {
+      const r = await c.kernel.request<ExecuteResult>('execute', { code: "globals().get('live_value')" });
+      return r.value?.repr === '42';
+    }, 15000, 'live re-run');
+    await focusPanel();
+    await vscode.commands.executeCommand('pylive.toggleLiveMode');
+    assert.equal(c.liveState(doc.uri).live, false);
+    // Run File from the panel also targets that editor.
+    await c.kernel.request<ExecuteResult>('execute', { code: 'live_value = 0' });
+    await vscode.commands.executeCommand('pylive.runFile');
+    const r = await c.kernel.request<ExecuteResult>('execute', { code: 'live_value' });
+    assert.equal(r.value?.repr, '42');
+    await doc.save();
   });
 
   test('extension host stays responsive during a long kernel computation', async () => {

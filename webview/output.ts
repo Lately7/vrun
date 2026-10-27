@@ -1,4 +1,8 @@
-/** Execution output: per-run blocks with streams, results, figures and tracebacks. */
+/**
+ * Execution output as a quiet, continuous log (newest at the bottom, like a
+ * terminal): one muted meta line per run, then its output. Errors get a thin
+ * red rule instead of a coloured card.
+ */
 import { button, clear, h } from './dom';
 
 interface ExecResult {
@@ -16,7 +20,7 @@ interface ExecResult {
 interface Block {
   el: HTMLElement;
   stdout: HTMLElement;
-  status: HTMLElement;
+  meta: HTMLElement;
   body: HTMLElement;
   docKey: string;
   done: boolean;
@@ -26,19 +30,27 @@ const MAX_BLOCKS = 60;
 const MAX_STDOUT_CHARS = 400_000;
 const BACKGROUND_ID = -1;
 
+function formatMs(ms: number | undefined): string {
+  if (ms === undefined) return '';
+  if (ms < 1) return '<1 ms';
+  return ms < 1000 ? `${ms < 10 ? ms.toFixed(1) : Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
 export class OutputView {
   readonly el = h('div', { class: 'output' });
-  private list = h('div', { class: 'runs', 'aria-live': 'polite' });
+  private list = h('div', { class: 'log', 'aria-live': 'polite' });
+  private empty = h('p', { class: 'muted empty-hint' }, 'Run a cell (Ctrl+Alt+C) and its output appears here.');
   private blocks = new Map<number, Block>();
   private superseded = new Set<number>();
   private errorCount = 0;
   onError: (count: number) => void = () => undefined;
 
-  constructor(private openDataFrame: (name: string) => void) {
-    this.el.append(
-      h('div', { class: 'toolbar' }, button('Clear', () => this.clear(), { title: 'Clear output' })),
-      this.list,
-    );
+  constructor(
+    private openDataFrame: (name: string) => void,
+    private dataframeEnabled: () => boolean,
+  ) {
+    const clearBtn = button('Clear', () => this.clear(), { cls: 'link-btn', title: 'Clear output' });
+    this.el.append(h('div', { class: 'log-tools' }, clearBtn), this.empty, this.list);
   }
 
   clear(): void {
@@ -46,17 +58,33 @@ export class OutputView {
     this.blocks.clear();
     this.errorCount = 0;
     this.onError(0);
+    this.empty.hidden = false;
+  }
+
+  /** Keep following new output only if the user has not scrolled up to read. */
+  private atBottom(): boolean {
+    const s = document.scrollingElement ?? document.documentElement;
+    return s.scrollHeight - s.scrollTop - s.clientHeight < 40;
+  }
+
+  private follow(wasAtBottom: boolean): void {
+    if (wasAtBottom) {
+      const s = document.scrollingElement ?? document.documentElement;
+      s.scrollTop = s.scrollHeight;
+    }
   }
 
   start(execId: number, label: string, mode: string, file = '', docKey = file): void {
-    const status = h('span', { class: 'run-status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), mode === 'live' ? 'live…' : 'running…');
+    const bottom = this.atBottom();
+    this.empty.hidden = true;
+    const meta = h('div', { class: 'run-meta' }, h('span', { class: 'dot-busy', 'aria-hidden': 'true' }), [file, label].filter(Boolean).join('  ·  '));
     const stdout = h('pre', { class: 'console' });
     const body = h('div', {});
-    const el = h('div', { class: `run ${mode}` }, h('div', { class: 'run-head' }, h('span', { class: 'run-label' }, file ? `${file} · ${label}` : label), status), stdout, body);
-    this.list.prepend(el);
-    this.blocks.set(execId, { el, stdout, status, body, docKey, done: false });
+    const el = h('div', { class: `run ${mode}` }, meta, stdout, body);
+    this.list.append(el);
+    this.blocks.set(execId, { el, stdout, meta, body, docKey, done: false });
     while (this.list.childElementCount > MAX_BLOCKS) {
-      const oldest = this.list.lastElementChild;
+      const oldest = this.list.firstElementChild;
       oldest?.remove();
       // Drop the map entry too, or evicted blocks (and their output) leak.
       for (const [id, b] of this.blocks) if (b.el === oldest) this.blocks.delete(id);
@@ -69,10 +97,12 @@ export class OutputView {
         this.blocks.delete(id);
       }
     }
+    this.follow(bottom);
   }
 
   stream(execId: number | null | undefined, name: string, text: string): void {
     if (execId !== null && execId !== undefined && this.superseded.has(execId)) return;
+    const bottom = this.atBottom();
     // Output the kernel could not attribute (background threads, evicted
     // runs) gets its own block instead of being mixed into the latest run.
     const target = (execId !== null && execId !== undefined ? this.blocks.get(execId) : undefined) ?? this.backgroundBlock();
@@ -95,15 +125,15 @@ export class OutputView {
         }
       }
     }
+    this.follow(bottom);
   }
 
   private backgroundBlock(): Block {
     let b = this.blocks.get(BACKGROUND_ID);
     if (!b) {
-      this.start(BACKGROUND_ID, 'Background output (threads started by earlier runs)', 'background');
+      this.start(BACKGROUND_ID, 'background threads', 'background');
       b = this.blocks.get(BACKGROUND_ID)!;
-      clear(b.status);
-      b.status.append(h('span', { class: 'muted' }, 'not tied to a single run'));
+      b.meta.querySelector('.dot-busy')?.remove();
     }
     return b;
   }
@@ -121,45 +151,57 @@ export class OutputView {
       if (this.superseded.size > 500) this.superseded.delete(this.superseded.values().next().value!);
       return;
     }
-    clear(b.status);
+    const bottom = this.atBottom();
+    b.meta.querySelector('.dot-busy')?.remove();
+    const note = (text: string) => b.meta.append(h('span', { class: 'meta-note' }, text));
     if (failure) {
-      b.status.append(h('span', { class: 'badge err' }, failure.code));
+      note(failure.code);
       b.body.appendChild(h('pre', { class: 'error-text' }, failure.message));
       b.el.classList.add('error');
+      this.follow(bottom);
       return;
     }
     if (!result) return;
     if (cancelled) {
-      b.status.append(h('span', { class: 'badge' }, 'not run'));
+      note('not run');
       return;
     }
     if (result.status === 'blocked') {
-      b.status.append(h('span', { class: 'badge warn' }, 'skipped'));
-      const f = result.analysis?.findings ?? [];
-      b.body.appendChild(h('div', { class: 'warn-text' }, 'Not re-run automatically (heuristic safety check):', h('ul', {}, ...f.slice(0, 5).map((x) => h('li', {}, `line ${x.line}: ${x.message}`)))));
+      note('skipped by Live Mode');
+      const f = result.analysis?.findings[0];
+      if (f) b.body.appendChild(h('div', { class: 'muted small' }, `line ${f.line}: ${f.message}`));
+      this.follow(bottom);
       return;
     }
-    const time = result.elapsedMs !== undefined ? `${result.elapsedMs} ms` : '';
-    b.status.append(h('span', { class: `badge ${result.status === 'ok' ? 'ok' : 'err'}` }, `[${result.executionCount}] ${result.status === 'ok' ? '✓' : result.interrupted ? 'interrupted' : 'error'}`), h('span', { class: 'muted' }, time));
+    b.meta.prepend(h('span', { class: 'count' }, `[${result.executionCount}]`));
+    note(result.interrupted ? 'interrupted' : formatMs(result.elapsedMs));
     if (result.value) {
       const v = result.value;
-      const valueBox = h('div', { class: 'result' }, h('div', { class: 'muted' }, v.shape ? `${v.shortType} ${v.shape.join(' × ')}` : v.shortType), h('pre', { class: 'console value' }, v.repr));
-      // `dataframe` is false for a Series, which the viewer shows too.
-      if (v.dataframe !== undefined) valueBox.appendChild(button(`Open result (_) in the ${v.dataframe ? 'DataFrame' : 'Series'} viewer`, () => this.openDataFrame('_')));
-      b.body.appendChild(valueBox);
+      const shape = v.shape ? `${v.shortType} ${v.shape.join(' × ')}` : '';
+      b.body.appendChild(h('pre', { class: 'console value' }, v.repr));
+      if (shape) {
+        const line = h('div', { class: 'muted small' }, shape);
+        // `dataframe` is false for a Series, which the viewer shows too.
+        if (v.dataframe !== undefined && this.dataframeEnabled()) {
+          line.append('  ', button('open', () => this.openDataFrame('_'), { cls: 'link-btn', title: 'Open the result (_) in the DataFrame tab' }));
+        }
+        b.body.appendChild(line);
+      }
     }
     for (const f of result.figures ?? []) {
       if (f.png) b.body.appendChild(h('img', { class: 'figure', src: `data:image/png;base64,${f.png}`, alt: 'matplotlib figure' }));
-      else if (f.error) b.body.appendChild(h('p', { class: 'warn-text' }, f.error));
+      else if (f.error) b.body.appendChild(h('p', { class: 'muted small' }, f.error));
     }
-    if (result.outputTruncated) b.body.appendChild(h('p', { class: 'warn-text' }, 'Output was truncated (2 MB per run).'));
+    if (result.outputTruncated) b.body.appendChild(h('p', { class: 'muted small' }, 'Output was truncated (2 MB per run).'));
     if (result.error) {
       b.el.classList.add('error');
       this.errorCount++;
       this.onError(this.errorCount);
-      b.body.appendChild(h('div', { class: 'traceback' }, h('div', { class: 'error-title' }, `${result.error.ename}: ${result.error.evalue}`), h('pre', {}, result.error.traceback)));
+      const details = h('details', { class: 'traceback' }, h('summary', {}, `${result.error.ename}: ${result.error.evalue}`), h('pre', {}, result.error.traceback));
+      b.body.appendChild(details);
     }
     const ml = result.analysis?.findings.filter((x) => x.category === 'training' || x.category === 'expensive');
-    if (ml?.length) b.body.appendChild(h('p', { class: 'muted' }, `ML safety: ${ml[0].message}. This cell is never re-run by Live Mode.`));
+    if (ml?.length) b.body.appendChild(h('p', { class: 'muted small' }, 'Model training: never re-run by Live Mode.'));
+    this.follow(bottom);
   }
 }

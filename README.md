@@ -71,8 +71,13 @@ Execution, Show Kernel Log.
 
 ### Settings
 
+The inspector starts minimal — **Variables** and **Output** only. Turn on the
+extra tabs in *Settings → PyLive Inspector* (or when a command asks):
+
 | Setting | Default | Meaning |
 |---|---|---|
+| `pylive.features.visualizer` | false | show the **Visualizer** tab (DSA step-by-step drawings) and its commands |
+| `pylive.features.dataframe` | false | show the **DataFrame** tab (paging, sort, filter, summaries) |
 | `pylive.pythonPath` | `""` | interpreter override |
 | `pylive.live.debounceMs` | 800 | delay before a live re-run |
 | `pylive.live.timeoutMs` | 5000 | time budget of one live run |

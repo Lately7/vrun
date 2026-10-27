@@ -4,7 +4,9 @@ import { describe, it } from 'node:test';
 import { cellAt, dedent, splitCells } from '../../src/exec/cells';
 import { LiveScheduler } from '../../src/exec/liveScheduler';
 import { parseWorkerLine } from '../../src/kernel/protocol';
-import { validateWebviewMessage } from '../../src/ui/validate';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { WEBVIEW_COMMANDS, WEBVIEW_COMMAND_IDS, validateWebviewMessage } from '../../src/ui/validate';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -83,6 +85,17 @@ describe('protocol parsing', () => {
     assert.equal(parseWorkerLine('{"type":"response","id":1,"ok":false}'), undefined);
     assert.equal(parseWorkerLine('{"type":"response","id":{},"ok":true}'), undefined);
     assert.equal(parseWorkerLine('[1,2]'), undefined);
+  });
+});
+
+describe('webview buttons', () => {
+  it('every button maps to a command contributed in package.json', () => {
+    // Regression: the Live button sent "pylive.toggleLive", which does not exist.
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', 'package.json'), 'utf8'));
+    const contributed = new Set((pkg.contributes.commands as Array<{ command: string }>).map((c) => c.command));
+    for (const name of WEBVIEW_COMMANDS) {
+      assert.ok(contributed.has(WEBVIEW_COMMAND_IDS[name]), `${name} -> ${WEBVIEW_COMMAND_IDS[name]}`);
+    }
   });
 });
 

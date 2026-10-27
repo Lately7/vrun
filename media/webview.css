@@ -26,29 +26,53 @@ body {
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size, 13px);
 }
+/* Calm chrome: no borders between header/tabs/content, muted text, colour
+   only for state that matters (busy, error). Meant for long sessions. */
 .top {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap);
-  padding: 6px 10px; border-bottom: 1px solid var(--border);
+  padding: 8px 14px 2px;
   position: sticky; top: 0; background: var(--vscode-editor-background); z-index: 3;
 }
-.controls { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
-.kstatus { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
-.kstatus .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
-.s-idle .dot { background: var(--ok); }
-.s-busy .dot, .s-starting .dot, .s-restarting .dot { background: var(--p0); animation: pulse 1s infinite alternate; }
-.s-interrupting .dot { background: var(--warn); }
-.s-crashed .dot { background: var(--err); }
-@keyframes pulse { from { opacity: 1; } to { opacity: 0.35; } }
+.controls { display: flex; flex-wrap: wrap; gap: 2px; margin-left: auto; }
+.kstatus { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 0.92em; }
+.kstatus .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: 0.6; display: inline-block; }
+.s-idle .dot { background: var(--ok); opacity: 0.75; }
+.s-busy .dot, .s-starting .dot, .s-restarting .dot { background: var(--p0); opacity: 1; animation: pulse 1.6s ease-in-out infinite alternate; }
+.s-interrupting .dot { background: var(--warn); opacity: 1; }
+.s-crashed .dot { background: var(--err); opacity: 1; }
+.s-crashed { color: var(--err); }
+@keyframes pulse { from { opacity: 1; } to { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
-.tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--border); }
-.tab {
-  background: none; border: none; color: var(--muted); padding: 7px 12px; cursor: pointer;
-  border-bottom: 2px solid transparent; font: inherit;
+/* Header buttons are plain text until hovered. */
+.hbtn {
+  font: inherit; font-size: 0.92em; color: var(--muted); background: none; border: none;
+  border-radius: var(--radius); padding: 3px 8px; cursor: pointer; white-space: nowrap;
 }
-.tab.active { color: var(--vscode-foreground); border-bottom-color: var(--accent); }
-.tab:focus-visible, .btn:focus-visible, th:focus-visible, tr:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
-.content { padding: 10px; }
+.hbtn:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15)); }
+.hbtn.on { color: var(--vscode-foreground); }
+.hbtn.on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--p0); margin-right: 6px; vertical-align: middle; }
+.hbtn.warn { color: var(--warn); }
+.hbtn.icon { font-size: 1.05em; padding: 2px 7px; }
+.link-btn {
+  font: inherit; font-size: 0.9em; color: var(--vscode-textLink-foreground); background: none; border: none;
+  padding: 0 2px; cursor: pointer; opacity: 0.8;
+}
+.link-btn:hover { opacity: 1; text-decoration: underline; }
+
+.tabs { display: flex; gap: 4px; padding: 0 10px; }
+.tab {
+  background: none; border: none; color: var(--muted); padding: 6px 8px 5px; cursor: pointer;
+  border-bottom: 1px solid transparent; font: inherit; font-size: 0.92em; opacity: 0.8;
+}
+.tab:hover { opacity: 1; }
+.tab.active { color: var(--vscode-foreground); border-bottom-color: var(--muted); opacity: 1; }
+.err-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--err); margin-left: 6px; vertical-align: middle; opacity: 0.8; }
+.tab:focus-visible, .btn:focus-visible, .hbtn:focus-visible, .link-btn:focus-visible, th:focus-visible, tr:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.content { padding: 10px 14px 24px; line-height: 1.45; }
+.empty-hint { margin: 18px 2px; }
+.small { font-size: 0.88em; }
+.toolbar.quiet { justify-content: flex-end; margin: 0 0 4px; }
 
 .btn, .seg-btn, .icon-btn {
   font: inherit; color: var(--vscode-button-secondaryForeground);
@@ -91,13 +115,20 @@ table.grid { border-collapse: collapse; width: 100%; font-variant-numeric: tabul
 .grid th, .grid td { border-bottom: 1px solid var(--border); padding: 3px 8px; text-align: left; vertical-align: top; }
 .grid thead th { position: sticky; top: 0; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); z-index: 1; }
 .grid tbody tr:hover { background: var(--vscode-list-hoverBackground); }
-.vars .name { font-family: var(--vscode-editor-font-family); font-weight: 600; }
-.vars .type { color: var(--muted); }
-.vars .value { font-family: var(--vscode-editor-font-family); max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
-.vars .actions { white-space: nowrap; text-align: right; }
-.vars .actions .btn { padding: 1px 6px; margin-left: 2px; }
+table.vars { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.vars td { padding: 4px 6px; vertical-align: top; }
+.vars tr { border-radius: 3px; }
+.vars tbody tr:hover { background: var(--vscode-list-hoverBackground); }
+.vars tr.expandable { cursor: pointer; }
+.vars .name { font-family: var(--vscode-editor-font-family); white-space: nowrap; }
+.vars .chev { display: inline-block; width: 1.1em; color: var(--muted); opacity: 0.6; font-size: 0.85em; }
+/* max-width:0 + width:100% lets the value column absorb the remaining width
+   and truncate with an ellipsis instead of pushing the table wider. */
+.vars .value { font-family: var(--vscode-editor-font-family); color: var(--muted); max-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vars .meta { color: var(--muted); opacity: 0.75; font-size: 0.88em; white-space: nowrap; text-align: right; }
+.vars .actions { white-space: nowrap; text-align: right; width: 1%; }
 .num { text-align: right; }
-td.detail { background: var(--vscode-textBlockQuote-background); }
+td.detail { padding: 2px 6px 10px 24px; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip { font-family: var(--vscode-editor-font-family); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
 table.kv { border-collapse: collapse; font-family: var(--vscode-editor-font-family); }
@@ -129,20 +160,26 @@ table.kv { border-collapse: collapse; font-family: var(--vscode-editor-font-fami
 .nullbar-fill { height: 100%; background: var(--err); }
 
 /* output */
-.run { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; padding: 6px 8px; }
-.run.error { border-color: var(--err); }
-.run.live { border-style: dashed; }
-.run-head { display: flex; justify-content: space-between; gap: 8px; }
-.run-label { font-weight: 600; }
+/* Output is a continuous log: a faint meta line per run, then the output. */
+.log-tools { display: flex; justify-content: flex-end; }
+.run { padding: 6px 0 8px 10px; border-left: 2px solid transparent; }
+.run + .run { border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent); }
+.run.error { border-left-color: color-mix(in srgb, var(--err) 70%, transparent); }
+.run-meta { color: var(--muted); opacity: 0.7; font-size: 0.85em; display: flex; gap: 8px; align-items: center; }
+.run-meta .count { font-variant-numeric: tabular-nums; }
+.run-meta .meta-note { margin-left: auto; font-variant-numeric: tabular-nums; }
+.dot-busy { width: 6px; height: 6px; border-radius: 50%; background: var(--p0); animation: pulse 1.6s ease-in-out infinite alternate; }
 .console {
   font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size, 12px);
-  white-space: pre-wrap; word-break: break-word; margin: 4px 0; max-height: 40vh; overflow: auto;
+  white-space: pre-wrap; word-break: break-word; margin: 3px 0 0; max-height: 40vh; overflow: auto;
 }
 .console:empty { display: none; }
 .console.small { max-height: 160px; }
-.console .stderr { color: var(--err); }
-.console.value { background: var(--vscode-textCodeBlock-background); padding: 4px 6px; border-radius: 3px; }
-.traceback pre { color: var(--err); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; margin: 4px 0; }
+.console .stderr { color: color-mix(in srgb, var(--err) 80%, var(--vscode-foreground)); }
+.console.value { color: var(--vscode-foreground); }
+details.traceback { margin-top: 3px; }
+details.traceback summary { color: color-mix(in srgb, var(--err) 85%, var(--vscode-foreground)); cursor: pointer; font-family: var(--vscode-editor-font-family); }
+.traceback pre { color: var(--muted); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; margin: 4px 0; font-size: 0.92em; }
 .error-title { font-weight: 600; color: var(--err); }
 img.figure { max-width: 100%; background: white; border-radius: 3px; margin: 4px 0; }
 

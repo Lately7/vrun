@@ -15,9 +15,10 @@ import {
 import { resolvePython } from './kernel/pythonResolver';
 import { EditorDecorations } from './ui/editorDecorations';
 import { InspectorPanel, PanelTab } from './ui/panel';
-import { WebviewMessage } from './ui/validate';
+import { WEBVIEW_COMMAND_IDS, WebviewMessage } from './ui/validate';
 
 type Mode = 'manual' | 'live';
+type Feature = 'visualizer' | 'dataframe';
 
 interface TraceContext {
   uri: vscode.Uri;
@@ -54,6 +55,7 @@ export class PyLiveController implements vscode.Disposable {
   private varsDirty = false;
   private readonly traceContexts = new Map<number, TraceContext>();
   private manualRunning = 0;
+  private lastPythonEditor: vscode.TextEditor | undefined;
   /** Live runs postponed while a manual run was in flight (scheduler key -> doc). */
   private readonly deferredLive = new Map<string, vscode.TextDocument>();
 
@@ -71,6 +73,8 @@ export class PyLiveController implements vscode.Disposable {
       this.panel.post({ type: 'session', session: ready.session, python: ready.python, cwd: ready.cwd, pid: ready.pid });
     });
     this.kernel.onInterruptStuck.on(() => void this.offerRestartAfterStuckInterrupt());
+    const active = vscode.window.activeTextEditor;
+    if (active?.document.languageId === 'python') this.lastPythonEditor = active;
     this.status.command = 'pylive.openVariables';
     this.onKernelStatus('stopped');
     this.status.show();
@@ -83,8 +87,14 @@ export class PyLiveController implements vscode.Disposable {
       vscode.workspace.onDidChangeTextDocument((e) => this.onDocumentChanged(e)),
       vscode.window.onDidChangeVisibleTextEditors((eds) => eds.forEach((ed) => this.decorations.refreshEditor(ed))),
       // The Live buttons show the state of the *active* document.
-      vscode.window.onDidChangeActiveTextEditor(() => this.postLiveState()),
+      vscode.window.onDidChangeActiveTextEditor((ed) => {
+        if (ed?.document.languageId === 'python') this.lastPythonEditor = ed;
+        this.postLiveState();
+      }),
       vscode.workspace.onDidCloseTextDocument((d) => this.disableLive(d.uri.toString())),
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('pylive.features')) this.postFeatures();
+      }),
     );
   }
 
@@ -118,8 +128,22 @@ export class PyLiveController implements vscode.Disposable {
     }
   }
 
+  /**
+   * The editor a command acts on. Clicking a button in the inspector moves
+   * focus to the webview, which leaves `activeTextEditor` undefined, so fall
+   * back to the last Python editor the user worked in (if still open).
+   */
+  private targetEditor(): vscode.TextEditor | undefined {
+    const active = vscode.window.activeTextEditor;
+    if (active) return active;
+    const last = this.lastPythonEditor;
+    if (!last || last.document.isClosed) return undefined;
+    // Prefer the live editor object for that document (its selection is current).
+    return vscode.window.visibleTextEditors.find((ed) => ed.document === last.document) ?? last;
+  }
+
   private async launchOptions() {
-    const doc = vscode.window.activeTextEditor?.document;
+    const doc = this.targetEditor()?.document;
     const resource = doc?.uri;
     const pythonPath = await resolvePython(resource, (t) => this.output.append(t));
     let cwd = os.homedir();
@@ -214,7 +238,7 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   async runSelection(): Promise<void> {
-    const editor = vscode.window.activeTextEditor;
+    const editor = this.targetEditor();
     if (!editor) return;
     const doc = editor.document;
     const sel = editor.selection;
@@ -227,23 +251,24 @@ export class PyLiveController implements vscode.Disposable {
       startLine = sel.start.line;
       text = doc.getText(selectionRange(doc, sel));
     }
-    await this.runCode(doc, dedent(text), startLine, 'manual', `selection (line ${startLine + 1})`, startLine + text.split('\n').length - 1);
+    await this.runCode(doc, dedent(text), startLine, 'manual', `line ${startLine + 1}`, startLine + text.split('\n').length - 1);
   }
 
   async runCell(): Promise<void> {
-    const editor = vscode.window.activeTextEditor;
+    const editor = this.targetEditor();
     if (!editor) return;
     const doc = editor.document;
     const cell = cellAt(doc.getText(), editor.selection.active.line);
     if (!cell) return;
-    const label = hasCellMarkers(doc.getText()) ? `cell at line ${cell.startLine + 1}` : 'file (no # %% cells)';
+    // Shown next to the file name in the Output log, so keep it short.
+    const label = hasCellMarkers(doc.getText()) ? `cell · line ${cell.startLine + 1}` : '';
     await this.runCode(doc, cell.text, cell.startLine, 'manual', label, cell.endLine);
   }
 
   async runFile(): Promise<void> {
-    const doc = vscode.window.activeTextEditor?.document;
+    const doc = this.targetEditor()?.document;
     if (!doc) return;
-    await this.runCode(doc, doc.getText(), 0, 'manual', path.basename(doc.fileName), doc.lineCount - 1);
+    await this.runCode(doc, doc.getText(), 0, 'manual', '', doc.lineCount - 1);
   }
 
   /** Execute code in the persistent namespace and update every view. */
@@ -335,7 +360,7 @@ export class PyLiveController implements vscode.Disposable {
   // ------------------------------------------------------------ live mode
 
   toggleLiveMode(): void {
-    const doc = vscode.window.activeTextEditor?.document;
+    const doc = this.targetEditor()?.document;
     if (!doc || doc.languageId !== 'python') {
       void vscode.window.showInformationMessage('PyLive: open a Python file to use Live Mode.');
       return;
@@ -357,8 +382,12 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   toggleLiveVisualize(): void {
-    const doc = vscode.window.activeTextEditor?.document;
-    if (!doc || doc.languageId !== 'python') return;
+    if (!this.featureEnabled('visualizer')) return;
+    const doc = this.targetEditor()?.document;
+    if (!doc || doc.languageId !== 'python') {
+      void vscode.window.showInformationMessage('PyLive: open a Python file to use Live Visualize.');
+      return;
+    }
     const key = doc.uri.toString();
     if (this.liveVizDocs.delete(key)) {
       this.scheduler.cancel(`trace:${key}`);
@@ -379,10 +408,40 @@ export class PyLiveController implements vscode.Disposable {
     }
   }
 
+  // --------------------------------------------------------------- features
+
+  /**
+   * The visualizer and DataFrame viewer are opt-in (Settings → PyLive) so
+   * the default panel stays minimal. Asks once to enable when used while off.
+   */
+  private featureEnabled(feature: Feature): boolean {
+    if (cfg().get<boolean>(`features.${feature}`, false)) return true;
+    const label = feature === 'visualizer' ? 'The algorithm visualizer (DSA)' : 'The DataFrame viewer';
+    void vscode.window.showInformationMessage(`PyLive: ${label} is turned off.`, 'Turn On', 'Open Settings').then((pick) => {
+      if (pick === 'Turn On') void cfg().update(`features.${feature}`, true, vscode.ConfigurationTarget.Global);
+      if (pick === 'Open Settings') void vscode.commands.executeCommand('workbench.action.openSettings', `pylive.features.${feature}`);
+    });
+    return false;
+  }
+
+  private postFeatures(): void {
+    this.panel.post({
+      type: 'features',
+      visualizer: cfg().get<boolean>('features.visualizer', false),
+      dataframe: cfg().get<boolean>('features.dataframe', false),
+    });
+  }
+
+  /** Live Mode / Live Visualize state of a document (used by tests and the UI). */
+  liveState(uri: vscode.Uri): { live: boolean; liveViz: boolean } {
+    const key = uri.toString();
+    return { live: this.liveDocs.has(key), liveViz: this.liveVizDocs.has(key) };
+  }
+
   private postLiveState(): void {
-    const doc = vscode.window.activeTextEditor?.document;
-    // No active editor: the inspector panel itself has focus; keep showing
-    // the last Python file's state. Any other editor: Live is off for it.
+    const doc = this.targetEditor()?.document;
+    // While the inspector has focus this is the last Python editor; for a
+    // non-Python editor Live is shown as off.
     if (!doc) return;
     const key = doc.uri.toString();
     const py = doc.languageId === 'python';
@@ -441,7 +500,8 @@ export class PyLiveController implements vscode.Disposable {
   // ------------------------------------------------------------ visualizer
 
   async visualize(): Promise<void> {
-    const doc = vscode.window.activeTextEditor?.document;
+    if (!this.featureEnabled('visualizer')) return;
+    const doc = this.targetEditor()?.document;
     if (!doc) return;
     this.panel.reveal('visualizer', true);
     await this.traceDocument(doc, 'manual', undefined);
@@ -532,6 +592,7 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   async openDataFrame(name?: string): Promise<void> {
+    if (!this.featureEnabled('dataframe')) return;
     if (!name) {
       if (!this.kernel.isRunning) {
         void vscode.window.showInformationMessage('PyLive: start the kernel and create a DataFrame first.');
@@ -562,6 +623,7 @@ export class PyLiveController implements vscode.Disposable {
   private async onWebviewMessage(msg: WebviewMessage): Promise<void> {
     switch (msg.type) {
       case 'ready':
+        this.postFeatures();
         this.panel.post({ type: 'status', status: this.kernel.status, workload: this.kernel.workload });
         if (this.kernel.info) {
           const i = this.kernel.info;
@@ -571,7 +633,7 @@ export class PyLiveController implements vscode.Disposable {
         this.postLiveState();
         return;
       case 'command':
-        await vscode.commands.executeCommand(`pylive.${msg.command === 'start' ? 'startKernel' : msg.command === 'restart' ? 'restartKernel' : msg.command === 'stop' ? 'stopKernel' : msg.command}`);
+        await vscode.commands.executeCommand(WEBVIEW_COMMAND_IDS[msg.command]);
         return;
       case 'refreshVariables':
         await this.refreshVariables();

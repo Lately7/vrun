@@ -43,7 +43,13 @@ export class VariablesView {
   constructor(
     private openDataFrame: (name: string) => void,
     private visualize: (name: string, root: Encoded, heap: Heap) => void,
+    private features: () => { dataframe: boolean; visualizer: boolean },
   ) {
+    this.render();
+  }
+
+  /** Re-render, e.g. after optional features were switched on or off. */
+  refresh(): void {
     this.render();
   }
 
@@ -105,12 +111,21 @@ export class VariablesView {
       this.renderTable(tableHost);
     });
     const tableHost = h('div', {});
+    // The filter only appears once there is enough to filter.
+    const showSearch = (this.list?.variables.length ?? 0) > 12 || this.filter !== '';
     this.el.append(
-      h('div', { class: 'toolbar' }, search, button('⟳ Refresh', () => send({ type: 'refreshVariables' }), { title: 'Refresh variables' }),
-        this.list ? h('span', { class: 'muted' }, `${this.list.variables.length} variables · revision ${this.list.revision}`) : null),
+      h('div', { class: 'toolbar quiet' }, showSearch ? search : null,
+        button('Refresh', () => send({ type: 'refreshVariables' }), { cls: 'link-btn', title: 'Refresh variables' })),
       tableHost,
     );
     this.renderTable(tableHost);
+  }
+
+  private meta(v: VariableInfo): string {
+    const shape = v.shape ? v.shape.join('×') : v.len !== undefined ? `len ${v.len}` : '';
+    const size = v.size !== undefined && v.size !== null && v.size >= 1024 ? `${v.sizeIsLowerBound ? '≥' : ''}${formatBytes(v.size)}` : '';
+    const type = v.type.split('.').pop() ?? v.type;
+    return [type, shape, size].filter(Boolean).join(' · ');
   }
 
   private renderTable(host: HTMLElement): void {
@@ -121,29 +136,36 @@ export class VariablesView {
     }
     const f = this.filter.toLowerCase();
     const rows = this.list.variables.filter((v) => !f || v.name.toLowerCase().includes(f) || v.type.toLowerCase().includes(f));
-    const table = h('table', { class: 'grid vars' }, h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Type'), h('th', {}, 'Shape / len'), h('th', {}, 'Value'), h('th', {}, 'Size'), h('th', {}, ''))));
+    if (rows.length === 0) {
+      host.appendChild(h('p', { class: 'muted empty-hint' }, f ? 'No variable matches the filter.' : 'No variables yet. Run some code.'));
+      return;
+    }
+    const { dataframe, visualizer } = this.features();
+    const table = h('table', { class: 'vars' });
     const tbody = h('tbody', {});
     for (const v of rows) {
-      const shape = v.shape ? v.shape.join(' × ') : v.len !== undefined ? String(v.len) : '';
+      const isFrame = v.kind === 'dataframe' || v.kind === 'series';
+      const expandable = !['function', 'class', 'dataframe', 'series', 'estimator', 'number', 'bool'].includes(v.kind);
       const actions = h('td', { class: 'actions' });
-      if (v.kind === 'dataframe' || v.kind === 'series') actions.appendChild(button('Open', () => this.openDataFrame(v.name), { title: 'Open in DataFrame viewer' }));
-      if (v.viz && v.kind !== 'dataframe' && v.kind !== 'series') actions.appendChild(button('Draw', () => void this.draw(v.name), { title: `Visualize as ${v.viz}` }));
-      if (!['function', 'class', 'dataframe', 'series', 'estimator'].includes(v.kind)) actions.appendChild(button(this.expanded.has(v.name) ? '▾' : '▸', () => this.toggle(v.name), { title: 'Details' }));
-      const tr = h('tr', { tabindex: 0 },
-        h('td', { class: 'name' }, v.name),
-        h('td', { class: 'type', title: v.type }, truncateText(v.type, 28)),
-        h('td', {}, shape),
-        h('td', { class: 'value', title: this.summary(v) }, truncateText(this.summary(v), 140)),
-        h('td', { class: 'num' }, v.size !== undefined ? `${v.sizeIsLowerBound ? '≥ ' : ''}${formatBytes(v.size)}` : ''),
+      if (isFrame && dataframe) actions.appendChild(button('open', () => this.openDataFrame(v.name), { cls: 'link-btn', title: 'Open in the DataFrame tab' }));
+      if (v.viz && !isFrame && visualizer) actions.appendChild(button('draw', () => void this.draw(v.name), { cls: 'link-btn', title: `Draw as ${v.viz}` }));
+      const nameCell = h('td', { class: 'name' }, expandable ? h('span', { class: 'chev', 'aria-hidden': 'true' }, this.expanded.has(v.name) ? '▾' : '▸') : h('span', { class: 'chev' }, ''), v.name);
+      const tr = h('tr', { tabindex: 0, class: expandable ? 'expandable' : '' },
+        nameCell,
+        h('td', { class: 'value', title: this.summary(v) }, truncateText(this.summary(v), 120)),
+        h('td', { class: 'meta', title: v.type }, this.meta(v)),
         actions,
       );
-      tr.addEventListener('dblclick', () => (v.kind === 'dataframe' || v.kind === 'series' ? this.openDataFrame(v.name) : this.toggle(v.name)));
+      const activate = () => (isFrame ? dataframe && this.openDataFrame(v.name) : expandable && this.toggle(v.name));
+      tr.addEventListener('click', (e) => {
+        if (!(e.target as HTMLElement).closest('button')) activate();
+      });
       tr.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') v.kind === 'dataframe' || v.kind === 'series' ? this.openDataFrame(v.name) : this.toggle(v.name);
+        if (e.key === 'Enter') activate();
       });
       tbody.appendChild(tr);
       if (this.expanded.has(v.name)) {
-        const detail = h('td', { colspan: 6, class: 'detail' }, h('span', { class: 'muted' }, 'Loading…'));
+        const detail = h('td', { colspan: 4, class: 'detail' }, h('span', { class: 'muted' }, 'Loading…'));
         tbody.appendChild(h('tr', {}, detail));
         void this.loadDetail(v.name, detail);
       }

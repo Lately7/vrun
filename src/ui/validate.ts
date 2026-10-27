@@ -18,6 +18,20 @@ export const WEBVIEW_COMMANDS = [
 ] as const;
 export type WebviewCommand = (typeof WEBVIEW_COMMANDS)[number];
 
+/** VS Code command run for each webview button (must match package.json). */
+export const WEBVIEW_COMMAND_IDS: Record<WebviewCommand, string> = {
+  start: 'pylive.startKernel',
+  restart: 'pylive.restartKernel',
+  stop: 'pylive.stopKernel',
+  interrupt: 'pylive.interrupt',
+  runCell: 'pylive.runCell',
+  runFile: 'pylive.runFile',
+  toggleLive: 'pylive.toggleLiveMode',
+  visualize: 'pylive.visualize',
+  toggleLiveVisualize: 'pylive.toggleLiveVisualize',
+  showLog: 'pylive.showLog',
+};
+
 export const FILTER_OPS = ['eq', 'ne', 'lt', 'le', 'gt', 'ge', 'contains', 'isnull', 'notnull'] as const;
 export type FilterOp = (typeof FILTER_OPS)[number];
 

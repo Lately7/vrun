@@ -46,17 +46,29 @@
     "menus": {
       "editor/title": [
         { "command": "pylive.runCell", "when": "editorLangId == python", "group": "navigation@1" },
-        { "command": "pylive.visualize", "when": "editorLangId == python", "group": "navigation@2" }
+        { "command": "pylive.visualize", "when": "editorLangId == python && config.pylive.features.visualizer", "group": "navigation@2" }
       ],
       "editor/context": [
         { "command": "pylive.runSelection", "when": "editorLangId == python && editorHasSelection", "group": "pylive@1" },
         { "command": "pylive.runCell", "when": "editorLangId == python", "group": "pylive@2" },
-        { "command": "pylive.visualize", "when": "editorLangId == python", "group": "pylive@3" }
+        { "command": "pylive.visualize", "when": "editorLangId == python && config.pylive.features.visualizer", "group": "pylive@3" }
       ]
     },
     "configuration": {
       "title": "PyLive Inspector",
       "properties": {
+        "pylive.features.visualizer": {
+          "type": "boolean",
+          "default": false,
+          "order": 0,
+          "description": "Show the algorithm visualizer (DSA) tab: step-by-step traces with arrays, number lines, graphs, trees and linked lists."
+        },
+        "pylive.features.dataframe": {
+          "type": "boolean",
+          "default": false,
+          "order": 1,
+          "description": "Show the DataFrame viewer tab for paging, sorting and filtering pandas DataFrames."
+        },
         "pylive.pythonPath": {
           "type": "string",
           "default": "",

@@ -1,4 +1,9 @@
-/** Webview entry: header (kernel status + controls), tabs, message routing. */
+/**
+ * Webview entry: a quiet header (kernel state + a few text buttons), tabs and
+ * message routing. The DataFrame and Visualizer tabs only exist when enabled
+ * in Settings (pylive.features.*), so the default panel is just
+ * Variables + Output.
+ */
 import { handleResponse, rejectAll, send, vscode } from './api';
 import { DataFrameView } from './dataframe';
 import { button, clear, h } from './dom';
@@ -6,17 +11,20 @@ import { OutputView } from './output';
 import { VariablesList, VariablesView } from './variables';
 import { Visualizer } from './visualizer';
 
-type Tab = 'variables' | 'dataframe' | 'output' | 'visualizer';
-const TABS: Array<[Tab, string]> = [
+type Tab = 'variables' | 'output' | 'dataframe' | 'visualizer';
+const ALL_TABS: Array<[Tab, string]> = [
   ['variables', 'Variables'],
-  ['dataframe', 'DataFrame'],
   ['output', 'Output'],
-  ['visualizer', 'Visualizer (DSA)'],
+  ['dataframe', 'DataFrame'],
+  ['visualizer', 'Visualizer'],
 ];
+
+const features = { dataframe: false, visualizer: false };
+const enabledTabs = () => ALL_TABS.filter(([id]) => (id === 'dataframe' ? features.dataframe : id === 'visualizer' ? features.visualizer : true));
 
 // Persisted state may come from an older version: validate before use.
 const saved = vscode.getState() as { tab?: unknown } | undefined;
-let tab: Tab = TABS.some(([id]) => id === saved?.tab) ? (saved!.tab as Tab) : 'variables';
+let tab: Tab = ALL_TABS.some(([id]) => id === saved?.tab) ? (saved!.tab as Tab) : 'variables';
 let status = 'stopped';
 let python = '';
 let frames: string[] = [];
@@ -28,7 +36,7 @@ const controls = h('div', { class: 'controls' });
 const tabBar = h('div', { class: 'tabs', role: 'tablist' });
 const content = h('main', { class: 'content' });
 
-const output = new OutputView((name) => openDataFrame(name));
+const output = new OutputView((name) => openDataFrame(name), () => features.dataframe);
 const dataframe = new DataFrameView(() => frames);
 const visualizer = new Visualizer();
 const variables = new VariablesView(
@@ -37,6 +45,7 @@ const variables = new VariablesView(
     visualizer.showSnapshot(name, root, heap);
     showTab('visualizer');
   },
+  () => features,
 );
 const views: Record<Tab, HTMLElement> = {
   variables: variables.el,
@@ -51,21 +60,25 @@ output.onError = (n) => {
 };
 
 function openDataFrame(name: string): void {
+  if (!features.dataframe) return;
   showTab('dataframe');
   void dataframe.open(name);
 }
 
 function showTab(t: Tab): void {
-  tab = t;
+  // A tab that was turned off in Settings falls back to Variables.
+  tab = enabledTabs().some(([id]) => id === t) ? t : 'variables';
   vscode.setState({ tab });
   renderTabs();
   clear(content);
-  content.appendChild(views[t]);
+  content.appendChild(views[tab]);
+  if (tab === 'output') errorBadge = 0;
 }
 
 function renderTabs(): void {
   clear(tabBar);
-  TABS.forEach(([id, label], i) => {
+  const tabs = enabledTabs();
+  tabs.forEach(([id, label], i) => {
     const b = h('button', {
       type: 'button',
       role: 'tab',
@@ -73,11 +86,11 @@ function renderTabs(): void {
       class: `tab ${tab === id ? 'active' : ''}`,
       'aria-selected': String(tab === id),
       tabindex: tab === id ? 0 : -1,
-    }, label, id === 'output' && errorBadge ? h('span', { class: 'badge err' }, String(errorBadge)) : null);
+    }, label, id === 'output' && errorBadge && tab !== 'output' ? h('span', { class: 'err-dot', title: `${errorBadge} error(s)` }) : null);
     b.addEventListener('click', () => showTab(id));
     b.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-        const next = TABS[(i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length][0];
+        const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length][0];
         showTab(next);
         (document.getElementById(`tab-${next}`) as HTMLElement | null)?.focus();
       }
@@ -89,17 +102,24 @@ function renderTabs(): void {
 function renderHeader(): void {
   clear(statusEl);
   statusEl.className = `kstatus s-${status}`;
-  statusEl.append(h('span', { class: 'dot', 'aria-hidden': 'true' }), `Kernel: ${status}`, python ? h('span', { class: 'muted' }, ` · Python ${python}`) : '');
+  statusEl.title = python ? `Python ${python}` : '';
+  statusEl.append(h('span', { class: 'dot', 'aria-hidden': 'true' }), status === 'idle' ? 'ready' : status);
   clear(controls);
   const running = status !== 'stopped' && status !== 'crashed';
   const busy = status === 'busy' || status === 'interrupting';
+  const cmd = (command: string) => () => send({ type: 'command', command });
   controls.append(
-    ...(running ? [] : [button('▶ Start kernel', () => send({ type: 'command', command: 'start' }), { cls: 'btn primary' })]),
-    button('Run cell', () => send({ type: 'command', command: 'runCell' }), { title: 'PyLive: Run Cell (Ctrl+Alt+C)' }),
-    button('Run file', () => send({ type: 'command', command: 'runFile' }), { title: 'PyLive: Run File' }),
-    button('■ Interrupt', () => send({ type: 'command', command: 'interrupt' }), { title: 'PyLive: Interrupt Execution (Ctrl+Alt+I)', disabled: !busy, cls: 'btn warn' }),
-    button('⟲ Restart', () => send({ type: 'command', command: 'restart' }), { title: 'Restart kernel: all variables are lost', disabled: !running }),
-    button(live ? '● Live: ON' : '○ Live: OFF', () => send({ type: 'command', command: 'toggleLive' }), { title: 'Toggle Live Mode for the active file', cls: `btn ${live ? 'on' : ''}`, pressed: live }),
+    ...(running ? [] : [button('Start', cmd('start'), { cls: 'hbtn', title: 'Start the Python kernel' })]),
+    button('Run cell', cmd('runCell'), { cls: 'hbtn', title: 'Run the cell at the cursor (Ctrl+Alt+C)' }),
+    button('Run file', cmd('runFile'), { cls: 'hbtn', title: 'Run the whole file' }),
+    // Only offered while something runs.
+    ...(busy ? [button('Stop', cmd('interrupt'), { cls: 'hbtn warn', title: 'Interrupt (Ctrl+Alt+I)' })] : []),
+    button(live ? 'Live on' : 'Live off', cmd('toggleLive'), {
+      cls: `hbtn ${live ? 'on' : ''}`,
+      pressed: live,
+      title: 'Re-run the current cell while you type (this file only)',
+    }),
+    ...(running ? [button('↻', cmd('restart'), { cls: 'hbtn icon', title: 'Restart kernel (clears all variables)' })] : []),
   );
 }
 
@@ -114,6 +134,12 @@ window.addEventListener('message', (ev: MessageEvent) => {
   switch (msg.type) {
     case 'response':
       handleResponse(msg as never);
+      break;
+    case 'features':
+      features.dataframe = !!msg.dataframe;
+      features.visualizer = !!msg.visualizer;
+      showTab(tab);
+      variables.refresh();
       break;
     case 'status':
       status = msg.status;
@@ -137,7 +163,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
       const list = msg.list as VariablesList;
       frames = list.variables.filter((v) => v.kind === 'dataframe' || v.kind === 'series').map((v) => v.name);
       variables.setList(list);
-      void dataframe.refreshIfOpen();
+      if (features.dataframe) void dataframe.refreshIfOpen();
       break;
     }
     case 'variablesError':
@@ -154,7 +180,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
       output.stream(msg.execId, msg.name, msg.text);
       break;
     case 'showTab':
-      if (TABS.some(([id]) => id === msg.tab)) showTab(msg.tab);
+      if (ALL_TABS.some(([id]) => id === msg.tab)) showTab(msg.tab);
       break;
     case 'openDataFrame':
       openDataFrame(msg.name);
