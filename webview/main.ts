@@ -146,7 +146,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
       output.start(msg.execId, msg.label, msg.mode);
       break;
     case 'execEnd':
-      output.end(msg.execId, msg.result, msg.failure, msg.cancelled);
+      output.end(msg.execId, msg.result, msg.failure, msg.cancelled, msg.superseded);
       if (msg.result?.status === 'error' && tab !== 'output' && msg.result?.error && !msg.result.interrupted) showTab('output');
       break;
     case 'stream':
@@ -159,7 +159,10 @@ window.addEventListener('message', (ev: MessageEvent) => {
       openDataFrame(msg.name);
       break;
     case 'traceStart':
-      visualizer.started(msg.label, msg.mode);
+      visualizer.started(msg.execId, msg.label, msg.mode);
+      break;
+    case 'traceSuperseded':
+      visualizer.superseded(msg.execId);
       break;
     case 'trace':
       visualizer.setTrace(msg.result, msg.label, msg.mode, msg.lineOffset);

@@ -21,6 +21,7 @@ interface Block {
 }
 
 const MAX_BLOCKS = 60;
+const MAX_STDOUT_CHARS = 400_000;
 
 export class OutputView {
   readonly el = h('div', { class: 'output' });
@@ -50,7 +51,12 @@ export class OutputView {
     const el = h('div', { class: `run ${mode}` }, h('div', { class: 'run-head' }, h('span', { class: 'run-label' }, label), status), stdout, body);
     this.list.prepend(el);
     this.blocks.set(execId, { el, stdout, status, body });
-    while (this.list.childElementCount > MAX_BLOCKS) this.list.lastElementChild?.remove();
+    while (this.list.childElementCount > MAX_BLOCKS) {
+      const oldest = this.list.lastElementChild;
+      oldest?.remove();
+      // Drop the map entry too, or evicted blocks (and their output) leak.
+      for (const [id, b] of this.blocks) if (b.el === oldest) this.blocks.delete(id);
+    }
     // Old live runs are noise: keep only the latest live block.
     if (mode === 'live') {
       for (const [id, b] of this.blocks) if (id !== execId && b.el.classList.contains('live') && !b.el.classList.contains('error')) {
@@ -66,8 +72,22 @@ export class OutputView {
     if (!target) return;
     const span = h('span', { class: name === 'stderr' ? 'stderr' : '' }, text);
     target.stdout.appendChild(span);
-    if (target.stdout.textContent && target.stdout.textContent.length > 400_000) {
-      target.stdout.firstChild?.remove();
+    const size = target.stdout.textContent?.length ?? 0;
+    if (size > MAX_STDOUT_CHARS) {
+      // Keep the newest text: drop whole old spans, then trim the oldest
+      // remaining one character-wise (a single huge span must survive).
+      let excess = size - MAX_STDOUT_CHARS;
+      while (excess > 0 && target.stdout.firstChild) {
+        const first = target.stdout.firstChild as HTMLElement;
+        const len = first.textContent?.length ?? 0;
+        if (len <= excess && first !== target.stdout.lastChild) {
+          first.remove();
+          excess -= len;
+        } else {
+          first.textContent = '[… earlier output trimmed]\n' + (first.textContent ?? '').slice(excess);
+          excess = 0;
+        }
+      }
     }
   }
 
@@ -77,9 +97,15 @@ export class OutputView {
     return last;
   }
 
-  end(execId: number, result: ExecResult | undefined, failure?: { code: string; message: string }, cancelled = false): void {
+  end(execId: number, result: ExecResult | undefined, failure?: { code: string; message: string }, cancelled = false, superseded = false): void {
     const b = this.blocks.get(execId);
     if (!b) return;
+    if (superseded) {
+      // A newer live run replaced this one; its result is intentionally dropped.
+      b.el.remove();
+      this.blocks.delete(execId);
+      return;
+    }
     clear(b.status);
     if (failure) {
       b.status.append(h('span', { class: 'badge err' }, failure.code));

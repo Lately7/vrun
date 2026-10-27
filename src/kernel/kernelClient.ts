@@ -112,6 +112,9 @@ export class KernelClient {
       env,
       shell: false,
       windowsHide: true,
+      // POSIX: own process group so killProcess() can signal the whole tree.
+      // (Windows uses taskkill /T instead; detached would open a console.)
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.proc = proc;
@@ -304,7 +307,11 @@ export class KernelClient {
       const killer = spawn('taskkill', ['/T', '/F', '/PID', String(proc.pid)], { shell: false, windowsHide: true });
       killer.on('error', () => proc.kill());
     } else {
-      proc.kill('SIGKILL');
+      try {
+        process.kill(-proc.pid, 'SIGKILL'); // negative pid: the process group
+      } catch {
+        proc.kill('SIGKILL');
+      }
     }
   }
 

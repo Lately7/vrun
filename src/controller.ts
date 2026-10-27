@@ -26,6 +26,17 @@ interface TraceContext {
 
 const cfg = () => vscode.workspace.getConfiguration('pylive');
 
+/**
+ * Exactly the selected text (selecting `a()` in `a(); b()` must not run b),
+ * except that a start inside the leading indentation snaps to column 0 so
+ * multi-line selections keep consistent indentation for dedent().
+ */
+function selectionRange(doc: vscode.TextDocument, sel: vscode.Selection): vscode.Range {
+  const first = doc.lineAt(sel.start.line);
+  const startChar = sel.start.character <= first.firstNonWhitespaceCharacterIndex ? 0 : sel.start.character;
+  return new vscode.Range(sel.start.line, startChar, sel.end.line, sel.end.character);
+}
+
 export class PyLiveController implements vscode.Disposable {
   readonly kernel = new KernelClient();
   private readonly output = vscode.window.createOutputChannel('PyLive Inspector');
@@ -204,8 +215,7 @@ export class PyLiveController implements vscode.Disposable {
       text = doc.lineAt(startLine).text;
     } else {
       startLine = sel.start.line;
-      const range = new vscode.Range(sel.start.line, 0, sel.end.line, doc.lineAt(sel.end.line).text.length);
-      text = doc.getText(range);
+      text = doc.getText(selectionRange(doc, sel));
     }
     await this.runCode(doc, dedent(text), startLine, 'manual', `selection (line ${startLine + 1})`, startLine + text.split('\n').length - 1);
   }
@@ -277,6 +287,9 @@ export class PyLiveController implements vscode.Disposable {
     if (!stale) {
       this.panel.post({ type: 'execEnd', execId, result });
       this.applyResultToEditor(doc, result, resultLine);
+    } else {
+      // Still close the block in the UI, or it would say "live…" forever.
+      this.panel.post({ type: 'execEnd', execId, superseded: true });
     }
     void this.refreshVariables();
     return result;
@@ -401,8 +414,7 @@ export class PyLiveController implements vscode.Disposable {
     const editor = vscode.window.visibleTextEditors.find((ed) => ed.document === doc);
     const sel = editor?.selection;
     if (sel && !sel.isEmpty) {
-      const range = new vscode.Range(sel.start.line, 0, sel.end.line, doc.lineAt(sel.end.line).text.length);
-      return { code: dedent(doc.getText(range)), lineOffset: sel.start.line, label: `selection (line ${sel.start.line + 1})` };
+      return { code: dedent(doc.getText(selectionRange(doc, sel))), lineOffset: sel.start.line, label: `selection (line ${sel.start.line + 1})` };
     }
     const text = doc.getText();
     if (hasCellMarkers(text) && editor) {
@@ -430,7 +442,11 @@ export class PyLiveController implements vscode.Disposable {
         maxSteps: cfg().get<number>('trace.maxSteps', 1000),
         timeoutMs: cfg().get<number>('trace.timeoutMs', 15000),
       });
-      if (isCurrent && !isCurrent()) return; // a newer edit superseded this trace
+      if (isCurrent && !isCurrent()) {
+        // A newer edit superseded this trace; let the UI drop its "Tracing…" state.
+        this.panel.post({ type: 'traceSuperseded', execId });
+        return;
+      }
       this.traceContext = { uri: doc.uri, lineOffset: scope.lineOffset };
       this.panel.post({ type: 'trace', execId, label: scope.label, mode, lineOffset: scope.lineOffset, result });
       if (result.error?.userFrame && result.error.userFrame.line > 0) {

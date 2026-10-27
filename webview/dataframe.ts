@@ -165,13 +165,22 @@ export class DataFrameView {
     void this.loadPage();
   }
 
+  /** True while the frame a detail request was made for is still on screen. */
+  private stillShowing(meta: Metadata): boolean {
+    return this.meta !== undefined && this.meta.name === meta.name && this.meta.revision === meta.revision;
+  }
+
   private async loadSummary(): Promise<void> {
-    if (!this.meta) return;
+    const meta = this.meta;
+    if (!meta) return;
     this.loading = 'Computing missing values and statistics over all rows…';
     this.render();
     try {
-      this.summary = await request<Summary>({ type: 'dfSummary', name: this.meta.name, revision: this.meta.revision });
+      const summary = await request<Summary>({ type: 'dfSummary', name: meta.name, revision: meta.revision });
+      if (!this.stillShowing(meta)) return; // user switched frames meanwhile
+      this.summary = summary;
     } catch (e) {
+      if (!this.stillShowing(meta)) return;
       this.error = (e as HostError).message;
     }
     this.loading = '';
@@ -179,12 +188,16 @@ export class DataFrameView {
   }
 
   private async loadColumn(col: number): Promise<void> {
-    if (!this.meta) return;
+    const meta = this.meta;
+    if (!meta) return;
     this.loading = 'Inspecting column…';
     this.render();
     try {
-      this.columnDetail = await request<ColumnDetail>({ type: 'dfColumn', name: this.meta.name, revision: this.meta.revision, column: col });
+      const detail = await request<ColumnDetail>({ type: 'dfColumn', name: meta.name, revision: meta.revision, column: col });
+      if (!this.stillShowing(meta)) return;
+      this.columnDetail = detail;
     } catch (e) {
+      if (!this.stillShowing(meta)) return;
       this.error = (e as HostError).message;
     }
     this.loading = '';

@@ -43,6 +43,7 @@ export class Visualizer {
   private snapshot: { name: string; root: Encoded; heap: Heap } | undefined;
   private busy = '';
   private liveViz = false;
+  private latestExecId = 0;
 
   constructor() {
     this.render();
@@ -64,12 +65,21 @@ export class Visualizer {
     this.render();
   }
 
-  started(label: string, mode: string): void {
+  started(execId: number, label: string, mode: string): void {
+    this.latestExecId = execId;
     this.busy = mode === 'live' ? `Tracing (live): ${label}…` : `Tracing ${label}…`;
     this.renderStatus();
   }
 
+  /** A live trace was superseded by a newer edit: clear its busy state. */
+  superseded(execId: number): void {
+    if (execId !== this.latestExecId) return; // a newer trace is still running
+    this.busy = '';
+    this.renderStatus();
+  }
+
   failed(message: string): void {
+    this.stop(); // the playback timer would otherwise keep firing
     this.busy = '';
     this.trace = undefined;
     this.snapshot = undefined;
