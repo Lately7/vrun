@@ -1,0 +1,10 @@
+﻿node_modules/
+out/
+media/webview.js
+*.vsix
+.venv/
+__pycache__/
+.pytest_cache/
+.vscode-test/
+benchmarks/data/
+
