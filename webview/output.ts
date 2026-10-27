@@ -18,7 +18,7 @@ interface Block {
   stdout: HTMLElement;
   status: HTMLElement;
   body: HTMLElement;
-  file: string;
+  docKey: string;
   done: boolean;
 }
 
@@ -47,13 +47,13 @@ export class OutputView {
     this.onError(0);
   }
 
-  start(execId: number, label: string, mode: string, file = ''): void {
+  start(execId: number, label: string, mode: string, file = '', docKey = file): void {
     const status = h('span', { class: 'run-status' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), mode === 'live' ? 'live…' : 'running…');
     const stdout = h('pre', { class: 'console' });
     const body = h('div', {});
     const el = h('div', { class: `run ${mode}` }, h('div', { class: 'run-head' }, h('span', { class: 'run-label' }, file ? `${file} · ${label}` : label), status), stdout, body);
     this.list.prepend(el);
-    this.blocks.set(execId, { el, stdout, status, body, file, done: false });
+    this.blocks.set(execId, { el, stdout, status, body, docKey, done: false });
     while (this.list.childElementCount > MAX_BLOCKS) {
       const oldest = this.list.lastElementChild;
       oldest?.remove();
@@ -63,7 +63,7 @@ export class OutputView {
     // Old live runs are noise: keep only the latest finished live block of
     // the same file (other files' blocks and runs still in flight stay).
     if (mode === 'live') {
-      for (const [id, b] of this.blocks) if (id !== execId && b.done && b.file === file && b.el.classList.contains('live') && !b.el.classList.contains('error')) {
+      for (const [id, b] of this.blocks) if (id !== execId && b.done && b.docKey === docKey && b.el.classList.contains('live') && !b.el.classList.contains('error')) {
         b.el.remove();
         this.blocks.delete(id);
       }

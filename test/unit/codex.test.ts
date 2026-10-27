@@ -7,10 +7,16 @@ import { after, before, describe, it } from 'node:test';
 import { dedent, hasCellMarkers, isCellMarker, splitCells } from '../../src/exec/cells';
 import { LiveScheduler } from '../../src/exec/liveScheduler';
 import { KernelClient } from '../../src/kernel/kernelClient';
-import { KernelRequestError } from '../../src/kernel/protocol';
+import { EventMessage, isReadyEvent, KernelRequestError } from '../../src/kernel/protocol';
 import { validateWebviewMessage } from '../../src/ui/validate';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => (resolve = r));
+  return { promise, resolve };
+}
 
 async function within<T>(promise: Promise<T>, ms = 2_000): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -293,6 +299,95 @@ describe('LiveScheduler adversarial sequencing', () => {
     await sleep(50);
     assert.equal(runs, 0);
   });
+
+  it('coalesces repeated schedules made while a cancelled old runner is settling', async () => {
+    const scheduler = new LiveScheduler(() => 5);
+    const oldStarted = deferred();
+    const releaseOld = deferred();
+    const runs: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    scheduler.schedule('doc', async () => {
+      runs.push('old');
+      active++;
+      maxActive = Math.max(maxActive, active);
+      oldStarted.resolve();
+      await releaseOld.promise;
+      active--;
+    });
+    await oldStarted.promise;
+    scheduler.cancel('doc');
+    scheduler.schedule('doc', async () => void runs.push('discarded'));
+    const latest = scheduler.schedule('doc', async (generation) => {
+      assert.equal(generation, latest);
+      runs.push('latest');
+      active++;
+      maxActive = Math.max(maxActive, active);
+      active--;
+    });
+    await sleep(20); // the latest debounce expires while the old runner owns the slot
+    assert.deepEqual(runs, ['old']);
+    releaseOld.resolve();
+    await sleep(20);
+    assert.deepEqual(runs, ['old', 'latest']);
+    assert.equal(maxActive, 1);
+  });
+
+  it('a second cancel drops a rescheduled follow-up while the old runner settles', async () => {
+    const scheduler = new LiveScheduler(() => 5);
+    const oldStarted = deferred();
+    const releaseOld = deferred();
+    const runs: string[] = [];
+    scheduler.schedule('doc', async () => {
+      runs.push('old');
+      oldStarted.resolve();
+      await releaseOld.promise;
+    });
+    await oldStarted.promise;
+    scheduler.cancel('doc');
+    const replacement = scheduler.schedule('doc', async () => void runs.push('replacement'));
+    await sleep(15); // mark the running slot dirty
+    scheduler.cancel('doc');
+    assert.equal(scheduler.isCurrent('doc', replacement), false);
+    releaseOld.resolve();
+    await sleep(20);
+    assert.deepEqual(runs, ['old']);
+    assert.equal(scheduler.isRunning('doc'), false);
+  });
+});
+
+describe('ready-event validation', () => {
+  const ready = (): EventMessage => ({
+    type: 'event',
+    event: 'ready',
+    session: '0123456789abcdef',
+    pid: 42,
+    python: { version: '3.12.0', executable: 'python' },
+    cwd: '/workspace',
+  });
+
+  it('accepts the complete worker ready shape', () => {
+    assert.equal(isReadyEvent(ready()), true);
+  });
+
+  it('rejects malformed session and Python metadata', () => {
+    for (const patch of [
+      { session: 'short' },
+      { session: '0123456789ABCDEZ' },
+      { cwd: 1 },
+      { python: null },
+      { python: { version: 3, executable: 'python' } },
+      { python: { version: '3.12.0', executable: 3 } },
+    ]) {
+      assert.equal(isReadyEvent({ ...ready(), ...patch }), false, JSON.stringify(patch));
+    }
+  });
+
+  it('rejects non-positive and unsafe process ids', () => {
+    for (const pid of [0, -1, Number.MAX_SAFE_INTEGER + 1, Number.POSITIVE_INFINITY, 1.5]) {
+      assert.equal(isReadyEvent({ ...ready(), pid }), false, String(pid));
+    }
+  });
 });
 
 describe('cell parsing and dedent edge cases', () => {
@@ -312,9 +407,12 @@ describe('cell parsing and dedent edge cases', () => {
     assert.equal(hasCellMarkers('x = 1\n  #%% next'), true);
   });
 
-  it('does not treat # %%% as a cell marker', () => {
-    assert.equal(isCellMarker('# %%% heading'), false);
-    assert.equal(splitCells('x = 1\n# %%% heading\ny = 2').length, 1);
+  it('treats deeper Spyder outline markers as compatible cell boundaries', () => {
+    assert.equal(isCellMarker('# %%% heading'), true);
+    assert.equal(isCellMarker('# %%%% deeper'), true);
+    const cells = splitCells('x = 1\n# %%% heading\ny = 2\n# %%%% deeper\nz = 3');
+    assert.equal(cells.length, 3);
+    assert.deepEqual(cells.map((cell) => cell.startLine), [0, 1, 3]);
   });
 
   it('represents an empty file as one empty cell', () => {
@@ -328,6 +426,18 @@ describe('cell parsing and dedent edge cases', () => {
   it('does not corrupt mixed indentation that has no common whitespace prefix', () => {
     const source = '\twith_tab()\n    with_spaces()';
     assert.equal(dedent(source), source);
+  });
+
+  it('dedents a common prefix across CRLF and clears indented blank lines', () => {
+    assert.equal(
+      dedent('    first()\r\n      \r\n        nested()\r\n\t\r\n    last()'),
+      'first()\n\n    nested()\n\nlast()',
+    );
+  });
+
+  it('normalizes whitespace-only blank lines even when nonblank lines have no common indent', () => {
+    assert.equal(dedent('left()\r\n    \r\nright()'), 'left()\n\nright()');
+    assert.equal(dedent('   \r\n\t\r\n'), '\n\n');
   });
 });
 
@@ -364,14 +474,17 @@ describe('webview message validation adversarial payloads', () => {
     }
   });
 
-  it('rejects strings containing NUL characters', () => {
-    assert.equal(validateWebviewMessage({ type: 'copy', text: 'safe\0suffix' }), undefined);
-    assert.equal(
+  it('preserves NUL characters in clipboard and DataFrame-filter data', () => {
+    assert.deepEqual(validateWebviewMessage({ type: 'copy', text: 'safe\0suffix' }), { type: 'copy', text: 'safe\0suffix' });
+    assert.deepEqual(
       validateWebviewMessage({
         type: 'dfPage', requestId: 1, name: 'df', revision: 0, offset: 0, limit: 10, colOffset: 0, colLimit: 10,
         filter: { column: 0, op: 'eq', value: 'x\0y' },
       }),
-      undefined,
+      {
+        type: 'dfPage', requestId: 1, name: 'df', revision: 0, offset: 0, limit: 10, colOffset: 0, colLimit: 10,
+        filter: { column: 0, op: 'eq', value: 'x\0y' },
+      },
     );
   });
 });

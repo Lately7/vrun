@@ -144,7 +144,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
       variables.error(msg.message);
       break;
     case 'execStart':
-      output.start(msg.execId, msg.label, msg.mode, msg.file);
+      output.start(msg.execId, msg.label, msg.mode, msg.file, msg.docKey);
       break;
     case 'execEnd':
       output.end(msg.execId, msg.result, msg.failure, msg.cancelled, msg.superseded);

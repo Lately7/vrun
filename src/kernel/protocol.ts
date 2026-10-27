@@ -191,7 +191,8 @@ export function isReadyEvent(msg: EventMessage): msg is ReadyEvent {
     typeof m.session === 'string' &&
     /^[0-9a-f]{16}$/.test(m.session) &&
     typeof m.pid === 'number' &&
-    Number.isInteger(m.pid) &&
+    Number.isSafeInteger(m.pid) &&
+    m.pid > 0 &&
     typeof m.cwd === 'string' &&
     typeof py === 'object' &&
     py !== null &&

@@ -77,7 +77,7 @@ export function dedent(text: string): string {
       prefix = prefix.slice(0, i);
     }
   }
-  if (!prefix) return lines.join('\n');
-  const cut = prefix.length;
+  // Whitespace-only lines are normalised to empty, as textwrap.dedent does.
+  const cut = prefix?.length ?? 0;
   return lines.map((l) => (l.trim() ? l.slice(cut) : '')).join('\n');
 }

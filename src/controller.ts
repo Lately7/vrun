@@ -54,6 +54,8 @@ export class PyLiveController implements vscode.Disposable {
   private varsDirty = false;
   private traceContext: TraceContext | undefined;
   private manualRunning = 0;
+  /** Live runs postponed while a manual run was in flight (scheduler key -> doc). */
+  private readonly deferredLive = new Map<string, vscode.TextDocument>();
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.panel = new InspectorPanel(
@@ -256,7 +258,8 @@ export class PyLiveController implements vscode.Disposable {
     }
     if (mode === 'manual') this.panel.reveal(undefined, true);
     const execId = ++this.execCounter;
-    this.panel.post({ type: 'execStart', execId, label, mode, file: path.basename(doc.fileName) });
+    // `file` is for display; `docKey` identifies the document (two files may share a basename).
+    this.panel.post({ type: 'execStart', execId, label, mode, file: path.basename(doc.fileName), docKey: doc.uri.toString() });
     const params: Record<string, unknown> = {
       code,
       file: this.fileLabel(doc),
@@ -282,7 +285,7 @@ export class PyLiveController implements vscode.Disposable {
       this.panel.post({ type: 'execEnd', execId, failure: { code: e.code, message: e.message } });
       return undefined;
     } finally {
-      if (mode === 'manual') this.manualRunning--;
+      if (mode === 'manual' && --this.manualRunning === 0) this.releaseDeferredLive();
     }
 
     const stale = liveCheck !== undefined && !liveCheck();
@@ -360,11 +363,22 @@ export class PyLiveController implements vscode.Disposable {
     this.panel.post({ type: 'liveState', live: this.liveDocs.has(key), liveViz: this.liveVizDocs.has(key) });
   }
 
+  private releaseDeferredLive(): void {
+    const pending = [...this.deferredLive];
+    this.deferredLive.clear();
+    for (const [key, doc] of pending) {
+      if (this.liveDocs.has(doc.uri.toString())) this.scheduler.schedule(key, (g) => this.runLive(doc, key, g));
+    }
+  }
+
   private postLiveState(): void {
     const doc = vscode.window.activeTextEditor?.document;
-    if (!doc || doc.languageId !== 'python') return; // keep the last Python file's state while the panel has focus
+    // No active editor: the inspector panel itself has focus; keep showing
+    // the last Python file's state. Any other editor: Live is off for it.
+    if (!doc) return;
     const key = doc.uri.toString();
-    this.panel.post({ type: 'liveState', live: this.liveDocs.has(key), liveViz: this.liveVizDocs.has(key) });
+    const py = doc.languageId === 'python';
+    this.panel.post({ type: 'liveState', live: py && this.liveDocs.has(key), liveViz: py && this.liveVizDocs.has(key) });
   }
 
   private disableLive(key: string): void {
@@ -399,10 +413,11 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   private async runLive(doc: vscode.TextDocument, key: string, gen: number): Promise<void> {
-    // Never compete with a manual run: try again after another debounce
-    // period instead of dropping the edit.
+    // Never compete with a manual run: remember the document and run it when
+    // the last manual run settles (event-driven, so a hung run cannot cause
+    // endless retries).
     if (this.manualRunning > 0) {
-      if (this.scheduler.isCurrent(key, gen)) this.scheduler.schedule(key, (g) => this.runLive(doc, key, g));
+      if (this.scheduler.isCurrent(key, gen)) this.deferredLive.set(key, doc);
       return;
     }
     for (const cell of this.liveTargets(doc)) {
