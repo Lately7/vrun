@@ -1,0 +1,231 @@
+/* PyLive Inspector webview. Colors come from VS Code theme variables so light,
+   dark and high-contrast themes work without extra rules. */
+:root {
+  --gap: 8px;
+  --radius: 4px;
+  --border: var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  --muted: var(--vscode-descriptionForeground);
+  --accent: var(--vscode-focusBorder);
+  --ok: var(--vscode-testing-iconPassed, #388a34);
+  --err: var(--vscode-errorForeground, #f14c4c);
+  --warn: var(--vscode-editorWarning-foreground, #cca700);
+  --changed: var(--vscode-editorWarning-foreground, #cca700);
+  --p0: var(--vscode-charts-blue, #3794ff);
+  --p1: var(--vscode-charts-red, #f14c4c);
+  --p2: var(--vscode-charts-green, #89d185);
+  --p3: var(--vscode-charts-purple, #b180d7);
+  --p4: var(--vscode-charts-orange, #d18616);
+  --p5: var(--vscode-charts-yellow, #cca700);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+}
+.top {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap);
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--vscode-editor-background); z-index: 3;
+}
+.controls { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.kstatus { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.kstatus .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.s-idle .dot { background: var(--ok); }
+.s-busy .dot, .s-starting .dot, .s-restarting .dot { background: var(--p0); animation: pulse 1s infinite alternate; }
+.s-interrupting .dot { background: var(--warn); }
+.s-crashed .dot { background: var(--err); }
+@keyframes pulse { from { opacity: 1; } to { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--border); }
+.tab {
+  background: none; border: none; color: var(--muted); padding: 7px 12px; cursor: pointer;
+  border-bottom: 2px solid transparent; font: inherit;
+}
+.tab.active { color: var(--vscode-foreground); border-bottom-color: var(--accent); }
+.tab:focus-visible, .btn:focus-visible, th:focus-visible, tr:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.content { padding: 10px; }
+
+.btn, .seg-btn, .icon-btn {
+  font: inherit; color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground); border: 1px solid transparent;
+  border-radius: var(--radius); padding: 3px 9px; cursor: pointer; white-space: nowrap;
+}
+.btn:hover:not(:disabled), .seg-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.btn.primary { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+.btn.primary:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+.btn.on, .seg-btn.on { outline: 1px solid var(--accent); }
+.btn.warn:not(:disabled) { color: var(--warn); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.icon-btn { padding: 0 4px; background: none; color: var(--muted); }
+.seg { display: inline-flex; gap: 2px; margin-left: auto; }
+.seg-btn { padding: 1px 7px; font-size: 0.9em; }
+
+input, select {
+  font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--border)); border-radius: var(--radius); padding: 3px 6px;
+}
+input.narrow { width: 90px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; }
+.label { color: var(--muted); }
+.muted { color: var(--muted); }
+.error-text { color: var(--err); white-space: pre-wrap; }
+.warn-text { color: var(--warn); }
+.loading { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.spinner {
+  width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent;
+  border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; margin-right: 6px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.badge { font-size: 0.85em; padding: 0 6px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); margin-left: 6px; }
+.badge.ok { background: transparent; color: var(--ok); border: 1px solid var(--ok); }
+.badge.err { background: var(--err); color: var(--vscode-editor-background); }
+.badge.warn { background: transparent; color: var(--warn); border: 1px solid var(--warn); }
+
+/* tables */
+table.grid { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.grid th, .grid td { border-bottom: 1px solid var(--border); padding: 3px 8px; text-align: left; vertical-align: top; }
+.grid thead th { position: sticky; top: 0; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); z-index: 1; }
+.grid tbody tr:hover { background: var(--vscode-list-hoverBackground); }
+.vars .name { font-family: var(--vscode-editor-font-family); font-weight: 600; }
+.vars .type { color: var(--muted); }
+.vars .value { font-family: var(--vscode-editor-font-family); max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+.vars .actions { white-space: nowrap; text-align: right; }
+.vars .actions .btn { padding: 1px 6px; margin-left: 2px; }
+.num { text-align: right; }
+td.detail { background: var(--vscode-textBlockQuote-background); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { font-family: var(--vscode-editor-font-family); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+table.kv { border-collapse: collapse; font-family: var(--vscode-editor-font-family); }
+.kv th { text-align: left; color: var(--muted); font-weight: normal; padding: 1px 10px 1px 0; }
+.kv td { padding: 1px 0; }
+
+/* dataframe */
+.df-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; }
+.df-header h2 { margin: 0; font-size: 1.15em; }
+.table-scroll { overflow: auto; max-height: 62vh; border: 1px solid var(--border); border-radius: var(--radius); }
+.df { font-family: var(--vscode-editor-font-family); font-size: 0.95em; }
+.df thead th { cursor: pointer; user-select: none; }
+.df .col-name { font-weight: 600; }
+.df .dtype { font-weight: normal; font-size: 0.8em; color: var(--muted); }
+.df th.idx { color: var(--muted); font-weight: normal; }
+.df td { white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; cursor: cell; }
+.df td.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+.v-num { text-align: right; }
+.v-missing { color: var(--muted); font-style: italic; }
+.v-none { color: var(--muted); font-style: italic; }
+.v-obj { color: var(--p3); }
+.v-date { color: var(--p4); }
+.k-numeric { color: var(--p0) !important; }
+.k-datetime { color: var(--p4) !important; }
+.k-category { color: var(--p3) !important; }
+.df-summary { margin-top: 12px; }
+.nullcell { display: flex; align-items: center; gap: 6px; }
+.nullbar { width: 80px; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.nullbar-fill { height: 100%; background: var(--err); }
+
+/* output */
+.run { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; padding: 6px 8px; }
+.run.error { border-color: var(--err); }
+.run.live { border-style: dashed; }
+.run-head { display: flex; justify-content: space-between; gap: 8px; }
+.run-label { font-weight: 600; }
+.console {
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size, 12px);
+  white-space: pre-wrap; word-break: break-word; margin: 4px 0; max-height: 40vh; overflow: auto;
+}
+.console:empty { display: none; }
+.console.small { max-height: 160px; }
+.console .stderr { color: var(--err); }
+.console.value { background: var(--vscode-textCodeBlock-background); padding: 4px 6px; border-radius: 3px; }
+.traceback pre { color: var(--err); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; margin: 4px 0; }
+.error-title { font-weight: 600; color: var(--err); }
+img.figure { max-width: 100%; background: white; border-radius: 3px; margin: 4px 0; }
+
+/* visualizer */
+.viz-intro { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.viz-status { color: var(--muted); display: inline-flex; align-items: center; }
+.empty { color: var(--vscode-foreground); }
+.player { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 6px 0; }
+.step-slider { flex: 1 1 160px; min-width: 120px; }
+.step-label { font-variant-numeric: tabular-nums; min-width: 110px; }
+.viz-layout { display: grid; grid-template-columns: minmax(220px, 38%) 1fr; gap: 10px; align-items: start; }
+@media (max-width: 760px) { .viz-layout { grid-template-columns: 1fr; } }
+.viz-code { position: sticky; top: 48px; }
+ol.code {
+  font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size, 12px);
+  margin: 4px 0; padding-left: 3.2em; max-height: 70vh; overflow: auto;
+  background: var(--vscode-textCodeBlock-background); border-radius: var(--radius);
+}
+ol.code li { white-space: pre; padding-right: 8px; }
+ol.code li::marker { color: var(--muted); }
+ol.code li.cur { background: var(--vscode-editor-stackFrameHighlightBackground, rgba(255, 255, 0, 0.2)); }
+ol.code li.cur.exc { background: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.2)); }
+ol.code li.prev { background: var(--vscode-editor-inactiveSelectionBackground); }
+.viz-right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.viz-grid { display: flex; flex-direction: column; gap: 10px; }
+.viz-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; overflow-x: auto; }
+.viz-card header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.viz-title { font-weight: 600; font-family: var(--vscode-editor-font-family); }
+.viz-body { overflow-x: auto; }
+.stack { display: flex; flex-direction: column; gap: 6px; }
+.frames { display: flex; flex-direction: column; gap: 6px; }
+.frame { border-left: 3px solid var(--border); padding-left: 6px; }
+.frame.top { border-left-color: var(--accent); }
+.frame-name { font-family: var(--vscode-editor-font-family); font-weight: 600; }
+
+svg.viz-svg { display: block; max-width: none; }
+svg text { fill: var(--vscode-foreground); font-family: var(--vscode-editor-font-family); font-size: 12px; }
+svg .muted-text, svg .index-text, svg .tick-text { fill: var(--muted); font-size: 10px; }
+svg .cell-text.small { font-size: 9px; }
+svg .axis { stroke: var(--muted); stroke-width: 1; }
+svg .axis.zero { stroke: var(--vscode-foreground); stroke-width: 1.5; }
+svg .axis-arrow { fill: var(--muted); }
+svg .grid { stroke: var(--border); stroke-width: 0.6; }
+svg .bar { fill: var(--p0); opacity: 0.75; }
+svg .bar.changed { fill: var(--changed); opacity: 1; }
+svg .bar.pointed { opacity: 1; }
+svg .cellbox { fill: var(--vscode-editor-background); stroke: var(--muted); stroke-width: 1; }
+svg .cellbox.changed { fill: var(--changed); fill-opacity: 0.3; stroke: var(--changed); }
+svg .cellbox.pointed { stroke: var(--accent); stroke-width: 2; }
+svg .ptr-line { stroke-width: 1.5; }
+svg .ptr-text { font-weight: 600; font-size: 11px; }
+svg .ptr-0 { stroke: var(--p0); fill: var(--p0); }
+svg .ptr-1 { stroke: var(--p1); fill: var(--p1); }
+svg .ptr-2 { stroke: var(--p2); fill: var(--p2); }
+svg .ptr-3 { stroke: var(--p3); fill: var(--p3); }
+svg .ptr-4 { stroke: var(--p4); fill: var(--p4); }
+svg .ptr-5 { stroke: var(--p5); fill: var(--p5); }
+svg text.ptr-text { stroke: none; }
+svg .nl-point { fill: var(--p0); opacity: 0.7; }
+svg .nl-mark { stroke: var(--vscode-editor-background); stroke-width: 1.5; }
+svg .chart-line { fill: none; stroke: var(--p0); stroke-width: 2; }
+svg .chart-dot { fill: var(--p0); }
+svg .chart-dot.hl { fill: var(--p1); }
+svg .edge { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+svg .edge.hot { stroke: var(--p1); stroke-width: 2.5; }
+svg .edge-arrow { fill: var(--muted); }
+svg .edge-label { fill: var(--p4); font-size: 10px; }
+svg .gnode, svg .tnode { fill: var(--vscode-editor-background); stroke: var(--vscode-foreground); stroke-width: 1.5; }
+svg .gnode.visited { fill: var(--p2); fill-opacity: 0.45; }
+svg .gnode.frontier { stroke: var(--p4); stroke-width: 3; }
+svg .gnode.onpath { stroke: var(--p1); stroke-width: 3; }
+svg .gnode.current, svg .tnode.pointed { fill: var(--p0); fill-opacity: 0.45; }
+svg .gnode-text { font-weight: 600; }
+svg .dist-text { fill: var(--p4); font-size: 10px; }
+svg .lnode { fill: var(--vscode-editor-background); stroke: var(--vscode-foreground); stroke-width: 1.5; }
+svg .lnode.pointed { stroke: var(--p0); stroke-width: 2.5; }
+svg .divider { stroke: var(--muted); }
+
+table.matrix { border-collapse: collapse; font-family: var(--vscode-editor-font-family); font-variant-numeric: tabular-nums; }
+.matrix th { color: var(--muted); font-weight: normal; padding: 1px 6px; font-size: 0.85em; }
+.matrix th.hl { color: var(--p0); font-weight: 700; }
+.matrix td { border: 1px solid var(--border); min-width: 30px; padding: 2px 6px; text-align: center; }
+.matrix td.heat { background: color-mix(in srgb, var(--p0) calc(var(--heat) * 35%), transparent); }
+.matrix td.cross { box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--accent) 10%, transparent); }
+.matrix td.cur { outline: 2px solid var(--p1); outline-offset: -2px; font-weight: 700; }
+.matrix td.changed { color: var(--changed); font-weight: 700; }

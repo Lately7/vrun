@@ -1,8 +1,8 @@
-﻿"""Cheap variable metadata for the Variables panel.
+"""Cheap variable metadata for the Variables panel.
 
 Nothing here performs full scans of large data or calls ``repr`` on unknown
 objects. DataFrame memory is reported shallow (``deep=False``); object
-columns are therefore a lower bound, which the UI marks with "â‰¥".
+columns are therefore a lower bound, which the UI marks with ">=".
 """
 
 from __future__ import annotations

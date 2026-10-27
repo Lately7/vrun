@@ -1,4 +1,4 @@
-﻿"""DataFrame metadata, paging, full-data sort/filter and on-demand summaries.
+"""DataFrame metadata, paging, full-data sort/filter and on-demand summaries.
 
 The frame never leaves the kernel. Pages are bounded by ``MAX_PAGE_ROWS`` x
 ``MAX_PAGE_COLS``. Sort/filter orderings are cached per execution count only,

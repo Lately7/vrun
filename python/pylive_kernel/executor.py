@@ -1,4 +1,4 @@
-﻿"""Execution of user code in the persistent namespace."""
+"""Execution of user code in the persistent namespace."""
 
 from __future__ import annotations
 

@@ -1,0 +1,179 @@
+/** Webview entry: header (kernel status + controls), tabs, message routing. */
+import { handleResponse, rejectAll, send, vscode } from './api';
+import { DataFrameView } from './dataframe';
+import { button, clear, h } from './dom';
+import { OutputView } from './output';
+import { VariablesList, VariablesView } from './variables';
+import { Visualizer } from './visualizer';
+
+type Tab = 'variables' | 'dataframe' | 'output' | 'visualizer';
+const TABS: Array<[Tab, string]> = [
+  ['variables', 'Variables'],
+  ['dataframe', 'DataFrame'],
+  ['output', 'Output'],
+  ['visualizer', 'Visualizer (DSA)'],
+];
+
+const saved = (vscode.getState() as { tab?: Tab } | undefined) ?? {};
+let tab: Tab = saved.tab ?? 'variables';
+let status = 'stopped';
+let python = '';
+let frames: string[] = [];
+let live = false;
+
+const app = document.getElementById('app')!;
+const statusEl = h('span', { class: 'kstatus', role: 'status' });
+const controls = h('div', { class: 'controls' });
+const tabBar = h('div', { class: 'tabs', role: 'tablist' });
+const content = h('main', { class: 'content' });
+
+const output = new OutputView((name) => openDataFrame(name));
+const dataframe = new DataFrameView(() => frames);
+const visualizer = new Visualizer();
+const variables = new VariablesView(
+  (name) => openDataFrame(name),
+  (name, root, heap) => {
+    visualizer.showSnapshot(name, root, heap);
+    showTab('visualizer');
+  },
+);
+const views: Record<Tab, HTMLElement> = {
+  variables: variables.el,
+  dataframe: dataframe.el,
+  output: output.el,
+  visualizer: visualizer.el,
+};
+let errorBadge = 0;
+output.onError = (n) => {
+  errorBadge = n;
+  renderTabs();
+};
+
+function openDataFrame(name: string): void {
+  showTab('dataframe');
+  void dataframe.open(name);
+}
+
+function showTab(t: Tab): void {
+  tab = t;
+  vscode.setState({ tab });
+  renderTabs();
+  clear(content);
+  content.appendChild(views[t]);
+}
+
+function renderTabs(): void {
+  clear(tabBar);
+  TABS.forEach(([id, label], i) => {
+    const b = h('button', {
+      type: 'button',
+      role: 'tab',
+      id: `tab-${id}`,
+      class: `tab ${tab === id ? 'active' : ''}`,
+      'aria-selected': String(tab === id),
+      tabindex: tab === id ? 0 : -1,
+    }, label, id === 'output' && errorBadge ? h('span', { class: 'badge err' }, String(errorBadge)) : null);
+    b.addEventListener('click', () => showTab(id));
+    b.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        const next = TABS[(i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length][0];
+        showTab(next);
+        (document.getElementById(`tab-${next}`) as HTMLElement | null)?.focus();
+      }
+    });
+    tabBar.appendChild(b);
+  });
+}
+
+function renderHeader(): void {
+  clear(statusEl);
+  statusEl.className = `kstatus s-${status}`;
+  statusEl.append(h('span', { class: 'dot', 'aria-hidden': 'true' }), `Kernel: ${status}`, python ? h('span', { class: 'muted' }, ` · Python ${python}`) : '');
+  clear(controls);
+  const running = status !== 'stopped' && status !== 'crashed';
+  const busy = status === 'busy' || status === 'interrupting';
+  controls.append(
+    ...(running ? [] : [button('▶ Start kernel', () => send({ type: 'command', command: 'start' }), { cls: 'btn primary' })]),
+    button('Run cell', () => send({ type: 'command', command: 'runCell' }), { title: 'PyLive: Run Cell (Ctrl+Alt+C)' }),
+    button('Run file', () => send({ type: 'command', command: 'runFile' }), { title: 'PyLive: Run File' }),
+    button('■ Interrupt', () => send({ type: 'command', command: 'interrupt' }), { title: 'PyLive: Interrupt Execution (Ctrl+Alt+I)', disabled: !busy, cls: 'btn warn' }),
+    button('⟲ Restart', () => send({ type: 'command', command: 'restart' }), { title: 'Restart kernel: all variables are lost', disabled: !running }),
+    button(live ? '● Live: ON' : '○ Live: OFF', () => send({ type: 'command', command: 'toggleLive' }), { title: 'Toggle Live Mode for the active file', cls: `btn ${live ? 'on' : ''}`, pressed: live }),
+  );
+}
+
+app.append(h('header', { class: 'top' }, statusEl, controls), tabBar, content);
+renderHeader();
+showTab(tab);
+
+window.addEventListener('message', (ev: MessageEvent) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const msg = ev.data as Record<string, any>;
+  if (!msg || typeof msg.type !== 'string') return;
+  switch (msg.type) {
+    case 'response':
+      handleResponse(msg as never);
+      break;
+    case 'status':
+      status = msg.status;
+      renderHeader();
+      break;
+    case 'session':
+      if (msg.session) {
+        python = msg.python?.version ?? '';
+        variables.invalidate('Kernel ready. Run some code to see variables.');
+      } else {
+        // Kernel stopped/restarted/crashed: every handle in the UI is invalid now.
+        python = '';
+        frames = [];
+        rejectAll({ code: 'stale_handle', message: 'The kernel was restarted; this view is no longer valid.' });
+        variables.invalidate(msg.restarting ? 'Kernel restarting — all variables were cleared.' : 'Kernel is not running. Previous variables are gone.');
+        dataframe.invalidate('The kernel was restarted or stopped, so this DataFrame no longer exists.');
+      }
+      renderHeader();
+      break;
+    case 'variables': {
+      const list = msg.list as VariablesList;
+      frames = list.variables.filter((v) => v.kind === 'dataframe' || v.kind === 'series').map((v) => v.name);
+      variables.setList(list);
+      void dataframe.refreshIfOpen();
+      break;
+    }
+    case 'variablesError':
+      variables.error(msg.message);
+      break;
+    case 'execStart':
+      output.start(msg.execId, msg.label, msg.mode);
+      break;
+    case 'execEnd':
+      output.end(msg.execId, msg.result, msg.failure, msg.cancelled);
+      if (msg.result?.status === 'error' && tab !== 'output' && msg.result?.error && !msg.result.interrupted) showTab('output');
+      break;
+    case 'stream':
+      output.stream(msg.execId, msg.name, msg.text);
+      break;
+    case 'showTab':
+      if (TABS.some(([id]) => id === msg.tab)) showTab(msg.tab);
+      break;
+    case 'openDataFrame':
+      openDataFrame(msg.name);
+      break;
+    case 'traceStart':
+      visualizer.started(msg.label, msg.mode);
+      break;
+    case 'trace':
+      visualizer.setTrace(msg.result, msg.label, msg.mode, msg.lineOffset);
+      if (msg.mode === 'manual') showTab('visualizer');
+      break;
+    case 'traceFailed':
+      visualizer.failed(`${msg.code}: ${msg.message}`);
+      break;
+    case 'liveState':
+      live = !!msg.live;
+      visualizer.setLiveViz(!!msg.liveViz);
+      renderHeader();
+      break;
+  }
+});
+
+send({ type: 'ready' });

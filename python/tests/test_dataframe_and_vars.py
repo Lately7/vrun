@@ -1,4 +1,4 @@
-﻿"""DataFrame paging, summaries and variable metadata through the protocol."""
+"""DataFrame paging, summaries and variable metadata through the protocol."""
 
 from __future__ import annotations
 

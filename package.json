@@ -1,0 +1,120 @@
+{
+  "name": "pylive-inspector",
+  "displayName": "PyLive Inspector",
+  "description": "Persistent Python kernel for .py files with a variable explorer, large-DataFrame viewer and real-time data-structure & algorithm visualizer.",
+  "version": "0.1.0",
+  "publisher": "pylive-local",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Data Science", "Visualization", "Education", "Other"],
+  "keywords": ["python", "pandas", "dataframe", "variable explorer", "algorithm visualizer"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onLanguage:python"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "PyLive Inspector executes Python code from the workspace."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      { "command": "pylive.startKernel", "title": "Start Kernel", "category": "PyLive" },
+      { "command": "pylive.restartKernel", "title": "Restart Kernel", "category": "PyLive", "icon": "$(debug-restart)" },
+      { "command": "pylive.stopKernel", "title": "Stop Kernel", "category": "PyLive", "icon": "$(debug-stop)" },
+      { "command": "pylive.runSelection", "title": "Run Selection", "category": "PyLive" },
+      { "command": "pylive.runCell", "title": "Run Cell", "category": "PyLive", "icon": "$(run)" },
+      { "command": "pylive.runFile", "title": "Run File", "category": "PyLive", "icon": "$(run-all)" },
+      { "command": "pylive.toggleLiveMode", "title": "Toggle Live Mode", "category": "PyLive" },
+      { "command": "pylive.visualize", "title": "Visualize Algorithm (step-by-step trace)", "category": "PyLive", "icon": "$(graph)" },
+      { "command": "pylive.toggleLiveVisualize", "title": "Toggle Live Visualize (DSA)", "category": "PyLive" },
+      { "command": "pylive.openVariables", "title": "Open Variable Explorer", "category": "PyLive" },
+      { "command": "pylive.openDataFrame", "title": "Open DataFrame Viewer", "category": "PyLive" },
+      { "command": "pylive.interrupt", "title": "Interrupt Execution", "category": "PyLive", "icon": "$(debug-pause)" },
+      { "command": "pylive.showLog", "title": "Show Kernel Log", "category": "PyLive" }
+    ],
+    "keybindings": [
+      { "command": "pylive.runSelection", "key": "ctrl+alt+enter", "mac": "cmd+alt+enter", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "pylive.runCell", "key": "ctrl+alt+c", "mac": "cmd+alt+c", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "pylive.visualize", "key": "ctrl+alt+v", "mac": "cmd+alt+v", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "pylive.interrupt", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorLangId == python" }
+    ],
+    "menus": {
+      "editor/title": [
+        { "command": "pylive.runCell", "when": "editorLangId == python", "group": "navigation@1" },
+        { "command": "pylive.visualize", "when": "editorLangId == python", "group": "navigation@2" }
+      ],
+      "editor/context": [
+        { "command": "pylive.runSelection", "when": "editorLangId == python && editorHasSelection", "group": "pylive@1" },
+        { "command": "pylive.runCell", "when": "editorLangId == python", "group": "pylive@2" },
+        { "command": "pylive.visualize", "when": "editorLangId == python", "group": "pylive@3" }
+      ]
+    },
+    "configuration": {
+      "title": "PyLive Inspector",
+      "properties": {
+        "pylive.pythonPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Python interpreter for the kernel. Empty: use the Python extension's selected interpreter, then `python` on PATH."
+        },
+        "pylive.live.debounceMs": {
+          "type": "number", "default": 800, "minimum": 150, "maximum": 10000,
+          "description": "Delay after the last edit before Live Mode re-runs code."
+        },
+        "pylive.live.timeoutMs": {
+          "type": "number", "default": 5000, "minimum": 200, "maximum": 120000,
+          "description": "Time budget for one live run. The kernel is interrupted when it is exceeded."
+        },
+        "pylive.interrupt.graceMs": {
+          "type": "number", "default": 3000, "minimum": 500, "maximum": 60000,
+          "description": "How long to wait for an interrupt before offering to restart the kernel."
+        },
+        "pylive.dataframe.pageSize": {
+          "type": "number", "default": 50, "minimum": 10, "maximum": 500,
+          "description": "Rows per DataFrame page."
+        },
+        "pylive.inspect.timeoutMs": {
+          "type": "number", "default": 20000, "minimum": 1000, "maximum": 600000,
+          "description": "Time budget for DataFrame summaries and other inspection requests."
+        },
+        "pylive.trace.maxSteps": {
+          "type": "number", "default": 1000, "minimum": 10, "maximum": 20000,
+          "description": "Maximum recorded steps for the algorithm visualizer."
+        },
+        "pylive.trace.timeoutMs": {
+          "type": "number", "default": 15000, "minimum": 500, "maximum": 600000,
+          "description": "Time budget for one algorithm trace."
+        },
+        "pylive.safeMl.confirmRepeatTraining": {
+          "type": "boolean", "default": true,
+          "description": "Ask before re-running a cell that trains a model and already ran in this kernel session."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p . --noEmit && tsc -p webview --noEmit",
+    "test": "npm run build && node esbuild.mjs --tests && node --test --test-concurrency=1 \"out/test/unit/*.test.js\"",
+    "test:py": "node scripts/run-pytest.mjs",
+    "test:vscode": "npm run build && node esbuild.mjs --tests && node out/test/integration/runTest.js",
+    "package": "npm run build -- --production && vsce package --no-dependencies",
+    "vscode:prepublish": "node esbuild.mjs --production"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "mocha": "^11.1.0",
+    "typescript": "^5.7.0"
+  }
+}
