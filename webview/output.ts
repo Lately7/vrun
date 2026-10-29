@@ -209,7 +209,6 @@ export class OutputView {
       this.follow(bottom);
       return;
     }
-    b.meta.prepend(h('span', { class: 'count' }, `[${result.executionCount}]`));
     note(formatMs(result.elapsedMs));
     if (result.value) {
       const v = result.value;

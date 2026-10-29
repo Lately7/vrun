@@ -714,6 +714,9 @@ class Worker:
                                 self.interrupt_reason = "timeout"
                         raise KeyboardInterrupt
                     timer = self._arm_live_timeout(remaining)
+                # Checked per statement: pandas is usually imported by the
+                # first statement and printed by a later one in the same run.
+                executor.apply_pandas_display()
                 try:
                     if statement.is_expression:
                         value = eval(statement.code, self.ns)

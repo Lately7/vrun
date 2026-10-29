@@ -221,6 +221,33 @@ def capture_figures() -> list[dict[str, Any]]:
     return figures
 
 
+_pandas_display_done = False
+
+
+def apply_pandas_display() -> None:
+    """Show every column of a DataFrame instead of ``...``.
+
+    pandas assumes an 80-character terminal (``display.width``) and drops
+    middle columns to fit; the Output panel is not one. Applied once, when
+    the user has imported pandas, and only to options still at pandas'
+    defaults, so an explicit ``pd.set_option`` by the user wins.
+    """
+    global _pandas_display_done
+    if _pandas_display_done:
+        return
+    pd = sys.modules.get("pandas")
+    if pd is None or not hasattr(pd, "get_option"):
+        return
+    _pandas_display_done = True
+    try:
+        if pd.get_option("display.width") == 80:
+            pd.set_option("display.width", 100_000)
+        if pd.get_option("display.max_columns") in (0, 20):
+            pd.set_option("display.max_columns", 100)
+    except Exception:  # noqa: BLE001 - display tweaks must never break a run
+        pass
+
+
 def silence_agg_show_warning() -> None:
     warnings.filterwarnings(
         "ignore", message=".*non-interactive.*cannot be shown", category=UserWarning)

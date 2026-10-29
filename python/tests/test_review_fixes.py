@@ -107,3 +107,19 @@ def test_trace_reports_why_tracing_stopped():
     r = tracer.run_trace("import sys\nsys.setrecursionlimit(80)\ndef d(n):\n    return d(n + 1)\ntry:\n    d(0)\nexcept RecursionError:\n    pass\n")
     sys_limit_note = r["stopped"] or ""
     assert "recursion limit" in sys_limit_note
+
+
+def test_dataframes_show_all_columns(kernel):
+    pytest.importorskip("pandas")
+    cols = ", ".join(f"'column_{i}': [{i}] * 3" for i in range(12))
+    r = kernel.run("import pandas as pd\ndf = pd.DataFrame({" + cols + "})\nprint(df)\ndf")
+    assert "column_11" in r["value"]["repr"] and "..." not in r["value"]["repr"]
+    time.sleep(0.2)
+    printed = "".join(e["text"] for e in kernel.events if e.get("event") == "stream")
+    assert "column_6" in printed and "..." not in printed
+
+
+def test_user_pandas_display_choice_is_kept(kernel):
+    pytest.importorskip("pandas")
+    kernel.run("import pandas as pd\npd.set_option('display.width', 50)\nx = 1")
+    assert kernel.run("pd.get_option('display.width')")["value"]["repr"] == "50"

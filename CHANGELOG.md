@@ -11,7 +11,7 @@
   tuples; quieter number line and call stack.
 
 ### Changed
-* Output shows only the latest run.
+* Output shows only the latest run, in full (no inner scroll box, no run counter); DataFrames show all columns (pandas display width raised once, unless set by the user).
 * Integration tests run from paths with spaces.
 
 ## 0.1.0 — 2026-10-28 (MVP)
