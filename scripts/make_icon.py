@@ -1,32 +1,48 @@
-"""Generate media/icon.png (128x128) with the standard library only."""
+"""Generate media/icon.png (128x128): the black-and-white Veil logo.
+
+A white sparkle (a large four-pointed star and a small one) on a black
+rounded square. Standard library only.
+"""
 
 import os
 import struct
 import zlib
 
 SIZE = 128
-BG = (30, 64, 120)
-BAR = (120, 200, 255)
-PTR = (255, 180, 60)
+SS = 4  # supersampling per axis for smooth (anti-aliased) edges
 
 
-def pixel(x: int, y: int) -> tuple[int, int, int]:
-    # Rounded square background
-    r = 22
-    cx = min(max(x, r), SIZE - 1 - r)
-    cy = min(max(y, r), SIZE - 1 - r)
-    if (x - cx) ** 2 + (y - cy) ** 2 > r * r:
-        return (0, 0, 0)
-    # Five bars of an "array" being sorted
-    heights = [40, 70, 55, 85, 30]
-    for i, h in enumerate(heights):
-        x0 = 18 + i * 19
-        if x0 <= x < x0 + 14 and 100 - h <= y < 100:
-            return PTR if i == 3 else BAR
-    # Pointer triangle under the highlighted bar
-    if 104 <= y < 116 and abs(x - (18 + 3 * 19 + 7)) <= (y - 104) // 2 + 1:
-        return PTR
-    return BG
+def coverage(x: float, y: float) -> tuple[bool, bool]:
+    """(inside the black square, white mark) for one sample point."""
+    r = 26.0
+    cx = min(max(x, r), SIZE - r)
+    cy = min(max(y, r), SIZE - r)
+    inside = (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+    if not inside:
+        return False, False
+    # Sparkles: astroid-shaped four-pointed stars (concave sides).
+    return True, _sparkle(x, y, 56, 70, 40) or _sparkle(x, y, 94, 32, 15)
+
+
+def _sparkle(x: float, y: float, cx: float, cy: float, radius: float) -> bool:
+    dx = abs(x - cx) / radius
+    dy = abs(y - cy) / radius
+    return dx ** (2 / 3) + dy ** (2 / 3) <= 1.0
+
+
+def pixel(px: int, py: int) -> tuple[int, int, int, int]:
+    inside = white = 0
+    for sy in range(SS):
+        for sx in range(SS):
+            i, w = coverage(px + (sx + 0.5) / SS, py + (sy + 0.5) / SS)
+            inside += i
+            white += w
+    n = SS * SS
+    alpha = round(255 * inside / n)
+    if inside == 0:
+        return 0, 0, 0, 0
+    level = round(255 * white / inside)
+    return level, level, level, alpha
 
 
 def main() -> None:
@@ -34,9 +50,7 @@ def main() -> None:
     for y in range(SIZE):
         raw.append(0)
         for x in range(SIZE):
-            r, g, b = pixel(x, y)
-            alpha = 0 if (r, g, b) == (0, 0, 0) else 255
-            raw += bytes((r, g, b, alpha))
+            raw += bytes(pixel(x, y))
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)

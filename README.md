@@ -45,17 +45,31 @@ Every array card can switch between *bars · cells · chart · number line · he
   standard library; pandas/NumPy/scikit-learn/matplotlib are used when you
   import them.
 
-## Install (local VSIX)
+## Install (local VSIX, any machine)
 
-```powershell
-code --install-extension pylive-inspector-0.1.0.vsix
-```
+The `.vsix` file is self-contained (about 90 KB): it bundles the extension and
+its Python kernel, and needs nothing from this repository.
 
-or in VS Code: *Extensions* view → `…` → *Install from VSIX…*. Reload the
-window. The extension only runs in **trusted** workspaces (it executes code).
+On the other machine:
 
-Choose the interpreter with the Python extension (*Python: Select
-Interpreter*) or set `pylive.pythonPath`.
+1. Install **VS Code 1.90+** and **Python 3.12+**. Install the libraries the
+   scripts use into that Python, e.g. `python -m pip install pandas openpyxl
+   numpy scikit-learn matplotlib` (`openpyxl` is needed for `read_excel`).
+2. Install the extension, from a terminal:
+
+   ```powershell
+   code --install-extension pylive-inspector-0.2.0.vsix
+   ```
+
+   or in VS Code: *Extensions* view → `…` → *Install from VSIX…*.
+3. Reload the window. Open a folder and trust it when asked (PyLive only runs
+   in **trusted** workspaces, because it executes code).
+4. PyLive uses the interpreter selected in the Python extension (*Python:
+   Select Interpreter*), else `python` on PATH; set `pylive.pythonPath` to
+   force one. *PyLive: Show Kernel Log* shows which one started.
+
+Optional panels (*Settings → PyLive Inspector*): `pylive.features.visualizer`
+(DSA visualizer) and `pylive.features.dataframe` (DataFrame viewer).
 
 ## Usage
 

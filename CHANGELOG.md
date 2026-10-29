@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-29
 
 ### Added
 * Live Mode loads data once and restores it from a snapshot (ADR-007); turning
@@ -13,6 +13,9 @@
 ### Changed
 * Output shows only the latest run, in full (no inner scroll box, no run counter); DataFrames show all columns (pandas display width raised once, unless set by the user).
 * Integration tests run from paths with spaces.
+* Output: the file name and run time share one line; no run counter.
+* Run Cell's editor-title icon is a circled play button, distinct from the
+  Python extension's Run/Debug triangle.
 
 ## 0.1.0 — 2026-10-28 (MVP)
 

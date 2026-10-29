@@ -166,7 +166,9 @@ table.kv { border-collapse: collapse; font-family: var(--vscode-editor-font-fami
 .run + .run { border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent); }
 .run.error { border-left-color: color-mix(in srgb, var(--err) 70%, transparent); }
 .run-meta { color: var(--muted); opacity: 0.7; font-size: 0.85em; display: flex; gap: 8px; align-items: center; }
-.run-meta .meta-note { margin-left: auto; font-variant-numeric: tabular-nums; }
+/* "cleaning.py · 1.0 s": the time sits right after the file name. */
+.run-meta .meta-note { font-variant-numeric: tabular-nums; }
+.run-meta .meta-note::before { content: '·'; margin-right: 8px; }
 .dot-busy { width: 6px; height: 6px; border-radius: 50%; background: var(--p0); animation: pulse 1.6s ease-in-out infinite alternate; }
 /* Output is shown in full (the panel itself scrolls); tables keep their
    alignment, so lines do not wrap and a wide table scrolls sideways only. */
