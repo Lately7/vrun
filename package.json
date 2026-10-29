@@ -1,9 +1,9 @@
 {
-  "name": "veil",
-  "displayName": "Veil",
+  "name": "vrun",
+  "displayName": "vrun",
   "description": "Persistent Python kernel for .py files with a variable explorer, large-DataFrame viewer and real-time data-structure & algorithm visualizer.",
-  "version": "0.2.0",
-  "publisher": "veil-local",
+  "version": "0.3.0",
+  "publisher": "vrun-local",
   "license": "MIT",
   "private": true,
   "engines": {
@@ -17,61 +17,61 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
-      "description": "Veil executes Python code from the workspace."
+      "description": "vrun executes Python code from the workspace."
     },
     "virtualWorkspaces": false
   },
   "contributes": {
     "commands": [
-      { "command": "veil.startKernel", "title": "Start Kernel", "category": "Veil" },
-      { "command": "veil.restartKernel", "title": "Restart Kernel", "category": "Veil", "icon": "$(debug-restart)" },
-      { "command": "veil.stopKernel", "title": "Stop Kernel", "category": "Veil", "icon": "$(debug-stop)" },
-      { "command": "veil.runSelection", "title": "Run Selection", "category": "Veil" },
-      { "command": "veil.runCell", "title": "Run Cell", "category": "Veil", "icon": "$(play-circle)" },
-      { "command": "veil.runFile", "title": "Run File", "category": "Veil", "icon": "$(run-all)" },
-      { "command": "veil.toggleLiveMode", "title": "Toggle Live Mode", "category": "Veil" },
-      { "command": "veil.visualize", "title": "Visualize Algorithm (step-by-step trace)", "category": "Veil", "icon": "$(graph)" },
-      { "command": "veil.toggleLiveVisualize", "title": "Toggle Live Visualize (DSA)", "category": "Veil" },
-      { "command": "veil.openVariables", "title": "Open Variable Explorer", "category": "Veil" },
-      { "command": "veil.openDataFrame", "title": "Open DataFrame Viewer", "category": "Veil" },
-      { "command": "veil.interrupt", "title": "Interrupt Execution", "category": "Veil", "icon": "$(debug-pause)" },
-      { "command": "veil.showLog", "title": "Show Kernel Log", "category": "Veil" },
-      { "command": "veil.clearInlineResults", "title": "Clear Inline Results", "category": "Veil" },
-      { "command": "veil.editInput", "title": "Edit Program Input (stdin)", "category": "Veil" }
+      { "command": "vrun.startKernel", "title": "Start Kernel", "category": "vrun" },
+      { "command": "vrun.restartKernel", "title": "Restart Kernel", "category": "vrun", "icon": "$(debug-restart)" },
+      { "command": "vrun.stopKernel", "title": "Stop Kernel", "category": "vrun", "icon": "$(debug-stop)" },
+      { "command": "vrun.runSelection", "title": "Run Selection", "category": "vrun" },
+      { "command": "vrun.runCell", "title": "Run Cell", "category": "vrun", "icon": "$(play-circle)" },
+      { "command": "vrun.runFile", "title": "Run File", "category": "vrun", "icon": "$(run-all)" },
+      { "command": "vrun.toggleLiveMode", "title": "Toggle Live Mode", "category": "vrun" },
+      { "command": "vrun.visualize", "title": "Visualize Algorithm (step-by-step trace)", "category": "vrun", "icon": "$(graph)" },
+      { "command": "vrun.toggleLiveVisualize", "title": "Toggle Live Visualize (DSA)", "category": "vrun" },
+      { "command": "vrun.openVariables", "title": "Open Variable Explorer", "category": "vrun" },
+      { "command": "vrun.openDataFrame", "title": "Open DataFrame Viewer", "category": "vrun" },
+      { "command": "vrun.interrupt", "title": "Interrupt Execution", "category": "vrun", "icon": "$(debug-pause)" },
+      { "command": "vrun.showLog", "title": "Show Kernel Log", "category": "vrun" },
+      { "command": "vrun.clearInlineResults", "title": "Clear Inline Results", "category": "vrun" },
+      { "command": "vrun.editInput", "title": "Edit Program Input (stdin)", "category": "vrun" }
     ],
     "keybindings": [
-      { "command": "veil.runSelection", "key": "ctrl+alt+enter", "mac": "cmd+alt+enter", "when": "editorTextFocus && editorLangId == python" },
-      { "command": "veil.runCell", "key": "ctrl+alt+c", "mac": "cmd+alt+c", "when": "editorTextFocus && editorLangId == python" },
-      { "command": "veil.visualize", "key": "ctrl+alt+v", "mac": "cmd+alt+v", "when": "editorTextFocus && editorLangId == python" },
-      { "command": "veil.interrupt", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorLangId == python" }
+      { "command": "vrun.runSelection", "key": "ctrl+alt+enter", "mac": "cmd+alt+enter", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "vrun.runCell", "key": "ctrl+alt+c", "mac": "cmd+alt+c", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "vrun.visualize", "key": "ctrl+alt+v", "mac": "cmd+alt+v", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "vrun.interrupt", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorLangId == python" }
     ],
     "menus": {
       "editor/title": [
-        { "command": "veil.runCell", "when": "editorLangId == python", "group": "navigation@1" },
-        { "command": "veil.visualize", "when": "editorLangId == python && config.veil.features.visualizer", "group": "navigation@2" }
+        { "command": "vrun.runCell", "when": "editorLangId == python", "group": "navigation@1" },
+        { "command": "vrun.visualize", "when": "editorLangId == python && config.vrun.features.visualizer", "group": "navigation@2" }
       ],
       "editor/context": [
-        { "command": "veil.runSelection", "when": "editorLangId == python && editorHasSelection", "group": "pylive@1" },
-        { "command": "veil.runCell", "when": "editorLangId == python", "group": "pylive@2" },
-        { "command": "veil.visualize", "when": "editorLangId == python && config.veil.features.visualizer", "group": "pylive@3" }
+        { "command": "vrun.runSelection", "when": "editorLangId == python && editorHasSelection", "group": "pylive@1" },
+        { "command": "vrun.runCell", "when": "editorLangId == python", "group": "pylive@2" },
+        { "command": "vrun.visualize", "when": "editorLangId == python && config.vrun.features.visualizer", "group": "pylive@3" }
       ]
     },
     "configuration": {
-      "title": "Veil",
+      "title": "vrun",
       "properties": {
-        "veil.features.visualizer": {
+        "vrun.features.visualizer": {
           "type": "boolean",
           "default": false,
           "order": 0,
           "description": "Show the algorithm visualizer (DSA) tab: step-by-step traces with arrays, number lines, graphs, trees and linked lists."
         },
-        "veil.features.dataframe": {
+        "vrun.features.dataframe": {
           "type": "boolean",
           "default": false,
           "order": 1,
           "description": "Show the DataFrame viewer tab for paging, sorting and filtering pandas DataFrames."
         },
-        "veil.inlineResults": {
+        "vrun.inlineResults": {
           "type": "string",
           "enum": ["values", "off"],
           "enumDescriptions": [
@@ -82,41 +82,41 @@
           "order": 2,
           "description": "Results shown inline in the editor after a run. Notes disappear when you edit their line."
         },
-        "veil.pythonPath": {
+        "vrun.pythonPath": {
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
           "description": "Python interpreter for the kernel. Empty: use the Python extension's selected interpreter, then `python` on PATH."
         },
-        "veil.live.debounceMs": {
+        "vrun.live.debounceMs": {
           "type": "number", "default": 800, "minimum": 150, "maximum": 10000,
           "description": "Delay after the last edit before Live Mode re-runs code."
         },
-        "veil.live.timeoutMs": {
+        "vrun.live.timeoutMs": {
           "type": "number", "default": 5000, "minimum": 200, "maximum": 120000,
           "description": "Time budget for one live run. The kernel is interrupted when it is exceeded."
         },
-        "veil.interrupt.graceMs": {
+        "vrun.interrupt.graceMs": {
           "type": "number", "default": 3000, "minimum": 500, "maximum": 60000,
           "description": "How long to wait for an interrupt before offering to restart the kernel."
         },
-        "veil.dataframe.pageSize": {
+        "vrun.dataframe.pageSize": {
           "type": "number", "default": 50, "minimum": 10, "maximum": 500,
           "description": "Rows per DataFrame page."
         },
-        "veil.inspect.timeoutMs": {
+        "vrun.inspect.timeoutMs": {
           "type": "number", "default": 20000, "minimum": 1000, "maximum": 600000,
           "description": "Time budget for DataFrame summaries and other inspection requests."
         },
-        "veil.trace.maxSteps": {
+        "vrun.trace.maxSteps": {
           "type": "number", "default": 1000, "minimum": 10, "maximum": 20000,
           "description": "Maximum recorded steps for the algorithm visualizer."
         },
-        "veil.trace.timeoutMs": {
+        "vrun.trace.timeoutMs": {
           "type": "number", "default": 15000, "minimum": 500, "maximum": 600000,
           "description": "Time budget for one algorithm trace."
         },
-        "veil.safeMl.confirmRepeatTraining": {
+        "vrun.safeMl.confirmRepeatTraining": {
           "type": "boolean", "default": true,
           "description": "Ask before re-running a cell that trains a model and already ran in this kernel session."
         }

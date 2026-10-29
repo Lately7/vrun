@@ -21,17 +21,17 @@ export type WebviewCommand = (typeof WEBVIEW_COMMANDS)[number];
 
 /** VS Code command run for each webview button (must match package.json). */
 export const WEBVIEW_COMMAND_IDS: Record<WebviewCommand, string> = {
-  start: 'veil.startKernel',
-  restart: 'veil.restartKernel',
-  stop: 'veil.stopKernel',
-  interrupt: 'veil.interrupt',
-  runCell: 'veil.runCell',
-  runFile: 'veil.runFile',
-  toggleLive: 'veil.toggleLiveMode',
-  visualize: 'veil.visualize',
-  toggleLiveVisualize: 'veil.toggleLiveVisualize',
-  showLog: 'veil.showLog',
-  editInput: 'veil.editInput',
+  start: 'vrun.startKernel',
+  restart: 'vrun.restartKernel',
+  stop: 'vrun.stopKernel',
+  interrupt: 'vrun.interrupt',
+  runCell: 'vrun.runCell',
+  runFile: 'vrun.runFile',
+  toggleLive: 'vrun.toggleLiveMode',
+  visualize: 'vrun.visualize',
+  toggleLiveVisualize: 'vrun.toggleLiveVisualize',
+  showLog: 'vrun.showLog',
+  editInput: 'vrun.editInput',
 };
 
 export const FILTER_OPS = ['eq', 'ne', 'lt', 'le', 'gt', 'ge', 'contains', 'isnull', 'notnull'] as const;

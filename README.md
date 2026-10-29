@@ -1,4 +1,4 @@
-# Veil
+# vrun
 
 A VS Code extension for people learning **Python, data science and data
 structures & algorithms**. Run ordinary `.py` files in a persistent Python
@@ -13,12 +13,12 @@ pointers, number lines, graphs, trees, linked lists and DP tables.
 | Persistent kernel | One long-running Python process per window. Variables and imports survive between runs. stdout/stderr captured, tracebacks mapped to your file's lines, status `idle / busy / interrupting / crashed`. |
 | Execution | Run Selection, Run Cell (`# %%` cells), Run File. Expression results are shown inline in the editor (`⇒ value`) and in the Output tab. Errors are underlined in the editor. |
 | Live Mode (opt-in) | Turning it on runs once right away (starting the kernel if needed); then, after you stop typing (800 ms), re-runs `# %% [live]` cells — or the cell under the cursor. **Data is loaded once**: `pd.read_csv/read_excel/...`, `np.load/loadtxt` run the first time only; later runs restore a fresh copy of what they loaded, so preprocessing such as `df["price"] *= 1.1` is never applied twice. A load re-runs when you edit its line or a variable it uses (e.g. the path). Model training, writing files, network, `while True` are never re-run automatically (AST heuristic). Each live run has a 5 s budget (first-time loads excluded) enforced by a real interrupt. |
-| Program input | For judge-style exercises, `input()` and `sys.stdin` read `<script>.in` next to the script (`solution.py` → `solution.in`); *Veil: Edit Program Input* creates/opens it. Editing the `.in` file re-runs Live. |
+| Program input | For judge-style exercises, `input()` and `sys.stdin` read `<script>.in` next to the script (`solution.py` → `solution.in`); *vrun: Edit Program Input* creates/opens it. Editing the `.in` file re-runs Live. |
 | Output | Shows the latest run only; a new run replaces the previous result. |
 | Safe ML | Re-running a cell that trains a model (`.fit`, `GridSearchCV`, `cross_val_score`, `.train()` …) asks for confirmation if it already ran in this kernel session. `# pylive: manual` in a cell excludes it from Live Mode. |
 | Variables | Name, type, shape/len, dtype(s), short value, shallow memory size. No `repr()` is called on unknown objects; DataFrame metadata never scans the data. Expand lists/dicts/objects, open DataFrames, draw structures. |
 | DataFrame viewer | The frame stays in the kernel. Pages of 25–500 rows, column windows for wide frames, dtype colours, NaN/NaT/None/<NA> rendered distinctly, **full-data** sort and filter (clearly labelled), on-demand missing-value % and statistics, per-column top values, copy cell/row. |
-| Visualizer (DSA) | `Veil: Visualize Algorithm` traces the current cell/file/selection in a fresh namespace and lets you step through it (⏮ ◀ ▶ ⏭, slider, play speed, ←/→ keys) while the current line is highlighted in the editor. **Live Visualize** re-traces as you type, keeping your step position. |
+| Visualizer (DSA) | `vrun: Visualize Algorithm` traces the current cell/file/selection in a fresh namespace and lets you step through it (⏮ ◀ ▶ ⏭, slider, play speed, ←/→ keys) while the current line is highlighted in the editor. **Live Visualize** re-traces as you type, keeping your step position. |
 | Figures | `matplotlib.pyplot` figures are rendered (Agg) and shown in the Output tab. |
 | Recovery | Interrupt (real `KeyboardInterrupt`), automatic offer to restart if native code does not respond, restart/stop with process-tree cleanup, crash detection; old variable handles are rejected after a restart. |
 
@@ -58,29 +58,29 @@ On the other machine:
 2. Install the extension, from a terminal:
 
    ```powershell
-   code --install-extension veil-0.2.0.vsix
+   code --install-extension vrun-0.3.0.vsix
    ```
 
    or in VS Code: *Extensions* view → `…` → *Install from VSIX…*.
-3. Reload the window. Open a folder and trust it when asked (Veil only runs
+3. Reload the window. Open a folder and trust it when asked (vrun only runs
    in **trusted** workspaces, because it executes code).
-4. Veil uses the interpreter selected in the Python extension (*Python:
-   Select Interpreter*), else `python` on PATH; set `veil.pythonPath` to
-   force one. *Veil: Show Kernel Log* shows which one started.
+4. vrun uses the interpreter selected in the Python extension (*Python:
+   Select Interpreter*), else `python` on PATH; set `vrun.pythonPath` to
+   force one. *vrun: Show Kernel Log* shows which one started.
 
-Optional panels (*Settings → Veil*): `veil.features.visualizer`
-(DSA visualizer) and `veil.features.dataframe` (DataFrame viewer).
+Optional panels (*Settings → vrun*): `vrun.features.visualizer`
+(DSA visualizer) and `vrun.features.dataframe` (DataFrame viewer).
 
 ## Usage
 
 1. Open a `.py` file (try `examples/dsa_demo.py` or `examples/pandas_demo.py`
    from the repository; both are also inside the installed extension folder).
 2. `Ctrl+Alt+C` **Run Cell**, `Ctrl+Alt+Enter` **Run Selection** (or the current
-   line), *Veil: Run File*. The inspector opens beside the editor.
+   line), *vrun: Run File*. The inspector opens beside the editor.
 3. `Ctrl+Alt+V` **Visualize Algorithm**, then step with ← / →.
-4. `Ctrl+Alt+I` **Interrupt**, *Veil: Restart Kernel* to start fresh.
+4. `Ctrl+Alt+I` **Interrupt**, *vrun: Restart Kernel* to start fresh.
 
-Commands (Command Palette → "Veil"): Start / Restart / Stop Kernel, Run
+Commands (Command Palette → "vrun"): Start / Restart / Stop Kernel, Run
 Selection / Cell / File, Toggle Live Mode, Visualize Algorithm, Toggle Live
 Visualize, Open Variable Explorer, Open DataFrame Viewer, Interrupt
 Execution, Show Kernel Log.
@@ -88,21 +88,21 @@ Execution, Show Kernel Log.
 ### Settings
 
 The inspector starts minimal — **Variables** and **Output** only. Turn on the
-extra tabs in *Settings → Veil* (or when a command asks):
+extra tabs in *Settings → vrun* (or when a command asks):
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `veil.features.visualizer` | false | show the **Visualizer** tab (DSA step-by-step drawings) and its commands |
-| `veil.features.dataframe` | false | show the **DataFrame** tab (paging, sort, filter, summaries) |
-| `veil.pythonPath` | `""` | interpreter override |
-| `veil.live.debounceMs` | 800 | delay before a live re-run |
-| `veil.live.timeoutMs` | 5000 | time budget of one live run |
-| `veil.interrupt.graceMs` | 3000 | wait before offering a restart |
-| `veil.dataframe.pageSize` | 50 | rows per page |
-| `veil.inspect.timeoutMs` | 20000 | budget for summaries/sorts |
-| `veil.trace.maxSteps` | 1000 | visualizer step limit |
-| `veil.trace.timeoutMs` | 15000 | visualizer time limit |
-| `veil.safeMl.confirmRepeatTraining` | true | confirm repeated training |
+| `vrun.features.visualizer` | false | show the **Visualizer** tab (DSA step-by-step drawings) and its commands |
+| `vrun.features.dataframe` | false | show the **DataFrame** tab (paging, sort, filter, summaries) |
+| `vrun.pythonPath` | `""` | interpreter override |
+| `vrun.live.debounceMs` | 800 | delay before a live re-run |
+| `vrun.live.timeoutMs` | 5000 | time budget of one live run |
+| `vrun.interrupt.graceMs` | 3000 | wait before offering a restart |
+| `vrun.dataframe.pageSize` | 50 | rows per page |
+| `vrun.inspect.timeoutMs` | 20000 | budget for summaries/sorts |
+| `vrun.trace.maxSteps` | 1000 | visualizer step limit |
+| `vrun.trace.timeoutMs` | 15000 | visualizer time limit |
+| `vrun.safeMl.confirmRepeatTraining` | true | confirm repeated training |
 
 The working directory of the kernel is the folder of the file that was active
 when it started, so `pd.read_excel("Online Retail.xlsx")` finds files next to
@@ -118,7 +118,7 @@ npm run typecheck
 npm test               # Node unit tests incl. KernelClient against real Python
 npm run test:py        # pytest (kernel, DataFrame, tracer, safety, serialization)
 npm run test:vscode    # integration tests in an Extension Development Host
-npm run package        # → veil-0.2.0.vsix
+npm run package        # → vrun-0.3.0.vsix
 python benchmarks/run_benchmarks.py     # see BENCHMARKS.md
 python scripts/build_harness.py         # dev/harness.html: webview with real data in a browser
 ```
@@ -138,7 +138,7 @@ Design and measurements are documented in the repository: `ARCHITECTURE.md`,
 
 * **Interrupt** raises `KeyboardInterrupt` between Python bytecodes. A single
   long native call (big NumPy/pandas operation, `time.sleep` on Windows) or
-  code that swallows `KeyboardInterrupt` cannot be interrupted; Veil then
+  code that swallows `KeyboardInterrupt` cannot be interrupted; vrun then
   offers a restart, which loses all variables.
 * **Live Mode safety is heuristic.** The AST check cannot see through
   aliases, helper functions or dynamic code. Live Mode is opt-in per file and

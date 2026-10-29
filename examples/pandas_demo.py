@@ -1,4 +1,4 @@
-# Veil — pandas workflow demo.
+# vrun — pandas workflow demo.
 # Run the first cell once (Ctrl+Alt+C). The DataFrame stays in the kernel;
 # the following cells reuse it without reloading anything.
 

@@ -230,7 +230,7 @@ export class OutputView {
     if (result.outputTruncated) b.body.appendChild(h('p', { class: 'muted small' }, 'Output was truncated (2 MB per run).'));
     if (result.interrupted) {
       b.body.appendChild(h('p', { class: 'muted small' }, result.interrupted === 'timeout'
-        ? 'Stopped: this live run took longer than the live time budget (veil.live.timeoutMs). Use Run Cell for slow code.'
+        ? 'Stopped: this live run took longer than the live time budget (vrun.live.timeoutMs). Use Run Cell for slow code.'
         : 'Stopped by you. Variables keep the values they had at that moment.'));
     } else if (result.error) {
       b.el.classList.add('error');

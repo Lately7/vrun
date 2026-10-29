@@ -1,29 +1,29 @@
 import * as vscode from 'vscode';
-import { VeilController } from './controller';
+import { VrunController } from './controller';
 
-let controller: VeilController | undefined;
+let controller: VrunController | undefined;
 
-export function activate(context: vscode.ExtensionContext): VeilController {
-  const c = new VeilController(context);
+export function activate(context: vscode.ExtensionContext): VrunController {
+  const c = new VrunController(context);
   controller = c;
   const reg = (id: string, fn: (...args: unknown[]) => unknown) =>
     context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
-  reg('veil.startKernel', () => c.startKernel());
-  reg('veil.restartKernel', () => c.restartKernel());
-  reg('veil.stopKernel', () => c.stopKernel());
-  reg('veil.runSelection', () => c.runSelection());
-  reg('veil.runCell', () => c.runCell());
-  reg('veil.runFile', () => c.runFile());
-  reg('veil.toggleLiveMode', () => c.toggleLiveMode());
-  reg('veil.visualize', () => c.visualize());
-  reg('veil.toggleLiveVisualize', () => c.toggleLiveVisualize());
-  reg('veil.openVariables', () => c.openVariables());
-  reg('veil.openDataFrame', (name?: unknown) => c.openDataFrame(typeof name === 'string' ? name : undefined));
-  reg('veil.interrupt', () => c.interrupt());
-  reg('veil.showLog', () => c.showLog());
-  reg('veil.clearInlineResults', () => c.clearInlineResults());
-  reg('veil.editInput', () => c.editProgramInput());
+  reg('vrun.startKernel', () => c.startKernel());
+  reg('vrun.restartKernel', () => c.restartKernel());
+  reg('vrun.stopKernel', () => c.stopKernel());
+  reg('vrun.runSelection', () => c.runSelection());
+  reg('vrun.runCell', () => c.runCell());
+  reg('vrun.runFile', () => c.runFile());
+  reg('vrun.toggleLiveMode', () => c.toggleLiveMode());
+  reg('vrun.visualize', () => c.visualize());
+  reg('vrun.toggleLiveVisualize', () => c.toggleLiveVisualize());
+  reg('vrun.openVariables', () => c.openVariables());
+  reg('vrun.openDataFrame', (name?: unknown) => c.openDataFrame(typeof name === 'string' ? name : undefined));
+  reg('vrun.interrupt', () => c.interrupt());
+  reg('vrun.showLog', () => c.showLog());
+  reg('vrun.clearInlineResults', () => c.clearInlineResults());
+  reg('vrun.editInput', () => c.editProgramInput());
   context.subscriptions.push(c);
   // Returned as the extension API so integration tests can observe state.
   return c;

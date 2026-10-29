@@ -409,7 +409,7 @@ def test_ten_megabyte_print_is_bounded_and_kernel_survives(kernel):
 
     assert result["status"] == "ok"
     assert result["outputTruncated"] is True
-    assert "[Veil: output truncated]" in output
+    assert "[vrun: output truncated]" in output
     assert len(output) <= 2 * 1024 * 1024 + 100
     assert kernel.call("ping", timeout=2)["result"]["pong"] is True
 

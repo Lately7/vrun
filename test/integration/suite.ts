@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Mocha from 'mocha';
 import * as vscode from 'vscode';
-import type { VeilController } from '../../src/controller';
+import type { VrunController } from '../../src/controller';
 import type { ExecuteResult, VariablesList } from '../../src/kernel/protocol';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -42,24 +42,24 @@ async function showAndActivate(doc: vscode.TextDocument, column?: vscode.ViewCol
 
 /** Put keyboard focus in the inspector webview (it opens beside the editor). */
 async function focusPanel(): Promise<void> {
-  await vscode.commands.executeCommand('veil.openVariables');
+  await vscode.commands.executeCommand('vrun.openVariables');
   const isPanel = () => vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputWebview;
   await waitFor(() => isPanel(), 5000, 'webview tab to become the active tab');
 }
 
 function tests(): void {
-  let c: VeilController;
+  let c: VrunController;
   const ws = process.env.PYLIVE_IT_WORKSPACE!;
 
   suiteSetup(async () => {
-    const config = vscode.workspace.getConfiguration('veil');
+    const config = vscode.workspace.getConfiguration('vrun');
     await config.update('pythonPath', process.env.PYLIVE_PYTHON, vscode.ConfigurationTarget.Global);
     // Opt-in panels used by the tests below.
     await config.update('features.visualizer', true, vscode.ConfigurationTarget.Global);
     await config.update('features.dataframe', true, vscode.ConfigurationTarget.Global);
-    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === 'veil');
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === 'vrun');
     assert.ok(ext, 'extension is installed in the dev host');
-    c = (await ext.activate()) as VeilController;
+    c = (await ext.activate()) as VrunController;
   });
 
   suiteTeardown(async () => {
@@ -69,9 +69,9 @@ function tests(): void {
   test('all commands are registered', async () => {
     const all = await vscode.commands.getCommands(true);
     for (const id of [
-      'veil.startKernel', 'veil.restartKernel', 'veil.stopKernel', 'veil.runSelection', 'veil.runCell',
-      'veil.runFile', 'veil.toggleLiveMode', 'veil.openVariables', 'veil.openDataFrame', 'veil.interrupt',
-      'veil.visualize', 'veil.toggleLiveVisualize',
+      'vrun.startKernel', 'vrun.restartKernel', 'vrun.stopKernel', 'vrun.runSelection', 'vrun.runCell',
+      'vrun.runFile', 'vrun.toggleLiveMode', 'vrun.openVariables', 'vrun.openDataFrame', 'vrun.interrupt',
+      'vrun.visualize', 'vrun.toggleLiveVisualize',
     ]) {
       assert.ok(all.includes(id), `missing command ${id}`);
     }
@@ -81,10 +81,10 @@ function tests(): void {
     const doc = await vscode.workspace.openTextDocument(path.join(ws, 'pandas_demo.py'));
     await showAndActivate(doc);
     let t = Date.now();
-    await vscode.commands.executeCommand('veil.startKernel');
+    await vscode.commands.executeCommand('vrun.startKernel');
     console.log(`      kernel start: ${Date.now() - t} ms`);
     t = Date.now();
-    await vscode.commands.executeCommand('veil.runFile');
+    await vscode.commands.executeCommand('vrun.runFile');
     console.log(`      run file (import pandas + 500k-row DataFrame): ${Date.now() - t} ms`);
     // The variables refresh that follows every run may still be in flight.
     await waitFor(() => c.kernel.status === 'idle', 10000, 'idle');
@@ -102,7 +102,7 @@ function tests(): void {
     const editor = await showAndActivate(doc);
     const line = doc.getText().split('\n').findIndex((l) => l.startsWith('nums = '));
     editor.selection = new vscode.Selection(line, 0, line, 0);
-    await vscode.commands.executeCommand('veil.runCell');
+    await vscode.commands.executeCommand('vrun.runCell');
     const list = await c.kernel.request<VariablesList>('variables.list');
     const names = list.variables.map((v) => v.name);
     assert.ok(names.includes('nums') && names.includes('mid'));
@@ -111,7 +111,7 @@ function tests(): void {
 
   test('Visualize traces without changing kernel variables', async () => {
     const before = await c.kernel.request<VariablesList>('variables.list');
-    await vscode.commands.executeCommand('veil.visualize');
+    await vscode.commands.executeCommand('vrun.visualize');
     const after = await c.kernel.request<VariablesList>('variables.list');
     assert.equal(after.revision, before.revision);
   });
@@ -125,7 +125,7 @@ function tests(): void {
     // active. (VS Code still reports the visible Python editor as active;
     // the button -> command mapping itself is covered by a unit test.)
     await focusPanel();
-    await vscode.commands.executeCommand('veil.toggleLiveMode');
+    await vscode.commands.executeCommand('vrun.toggleLiveMode');
     assert.equal(c.liveState(doc.uri).live, true, 'Live Mode must turn on for the last Python editor');
     // Editing re-runs the cell automatically after the debounce.
     await editor.edit((e) => e.replace(new vscode.Range(0, 0, 0, doc.lineAt(0).text.length), 'live_value = 41 + 1'));
@@ -134,11 +134,11 @@ function tests(): void {
       return r.value?.repr === '42';
     }, 15000, 'live re-run');
     await focusPanel();
-    await vscode.commands.executeCommand('veil.toggleLiveMode');
+    await vscode.commands.executeCommand('vrun.toggleLiveMode');
     assert.equal(c.liveState(doc.uri).live, false);
     // Run File from the panel also targets that editor.
     await c.kernel.request<ExecuteResult>('execute', { code: 'live_value = 0' });
-    await vscode.commands.executeCommand('veil.runFile');
+    await vscode.commands.executeCommand('vrun.runFile');
     const r = await c.kernel.request<ExecuteResult>('execute', { code: 'live_value' });
     assert.equal(r.value?.repr, '42');
     await doc.save();
@@ -152,7 +152,7 @@ function tests(): void {
     const doc = await vscode.workspace.openTextDocument(file);
     const editor = await showAndActivate(doc);
     // Turning Live on runs once right away (and starts the kernel if needed).
-    await vscode.commands.executeCommand('veil.toggleLiveMode');
+    await vscode.commands.executeCommand('vrun.toggleLiveMode');
     const totalIs = (expected: string) => async () => {
       const r = await c.kernel.request<ExecuteResult>('execute', { code: "globals().get('total')" });
       return r.value?.repr === expected;
@@ -162,7 +162,7 @@ function tests(): void {
     fs.unlinkSync(csv);
     await editor.edit((e) => e.replace(doc.lineAt(2).range, 'total = df["v"].sum() * 10'));
     await waitFor(totalIs('60'), 15000, 'live re-run without re-reading');
-    await vscode.commands.executeCommand('veil.toggleLiveMode');
+    await vscode.commands.executeCommand('vrun.toggleLiveMode');
     await doc.save();
   });
 
@@ -171,7 +171,7 @@ function tests(): void {
     fs.writeFileSync(file, 'import pandas as pd\npd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})\n');
     const doc = await vscode.workspace.openTextDocument(file);
     await showAndActivate(doc);
-    await vscode.commands.executeCommand('veil.runFile');
+    await vscode.commands.executeCommand('vrun.runFile');
     assert.deepEqual([...c.inlineNotes(doc)], [[1, 'DataFrame 3 × 2']]);
   });
 
@@ -182,7 +182,7 @@ function tests(): void {
     fs.writeFileSync(input, '2\n5 7 9\n');
     const doc = await vscode.workspace.openTextDocument(file);
     await showAndActivate(doc, vscode.ViewColumn.One);
-    await vscode.commands.executeCommand('veil.toggleLiveVisualize');
+    await vscode.commands.executeCommand('vrun.toggleLiveVisualize');
     const totalInTrace = () => {
       const t = c.lastTrace;
       if (!t || t.uri.toString() !== doc.uri.toString() || !t.result.steps.length) return undefined;
@@ -204,7 +204,7 @@ function tests(): void {
     await inEditor.edit((e) => e.replace(new vscode.Range(0, 0, 0, 1), '3'));
     await waitFor(() => totalInTrace() === 21, 15000, 'trace with the edited input');
     await showAndActivate(doc, vscode.ViewColumn.One);
-    await vscode.commands.executeCommand('veil.toggleLiveVisualize');
+    await vscode.commands.executeCommand('vrun.toggleLiveVisualize');
     await inDoc.save();
   });
 
@@ -214,7 +214,7 @@ function tests(): void {
     const doc = await vscode.workspace.openTextDocument(file);
     // Same group as the inspector on purpose: running must not cover the file.
     const editor = await showAndActivate(doc);
-    await vscode.commands.executeCommand('veil.runFile');
+    await vscode.commands.executeCommand('vrun.runFile');
     assert.ok(vscode.window.visibleTextEditors.some((ed) => ed.document === doc), 'the edited file stays visible');
     // Only the value of the final expression (on its own line), no "✓ [n] ms" noise.
     assert.deepEqual([...c.inlineNotes(doc)], [[2, '2']]);
@@ -222,16 +222,16 @@ function tests(): void {
     await editor.edit((e) => e.insert(new vscode.Position(2, 5), '0'));
     assert.equal(c.inlineNotes(doc).size, 0);
     // Live Mode with a half-typed statement says nothing in the editor.
-    await vscode.commands.executeCommand('veil.toggleLiveMode');
+    await vscode.commands.executeCommand('vrun.toggleLiveMode');
     await editor.edit((e) => e.replace(new vscode.Range(0, 0, doc.lineCount, 0), 'for i in range(3)\n'));
     await sleep(2500); // debounce + live run
     assert.equal(c.inlineNotes(doc).size, 0);
-    await vscode.commands.executeCommand('veil.toggleLiveMode');
+    await vscode.commands.executeCommand('vrun.toggleLiveMode');
     // And the clear command removes everything.
     await editor.edit((e) => e.replace(new vscode.Range(0, 0, doc.lineCount, 0), '40 + 2\n'));
-    await vscode.commands.executeCommand('veil.runFile');
+    await vscode.commands.executeCommand('vrun.runFile');
     assert.equal(c.inlineNotes(doc).size, 1);
-    await vscode.commands.executeCommand('veil.clearInlineResults');
+    await vscode.commands.executeCommand('vrun.clearInlineResults');
     assert.equal(c.inlineNotes(doc).size, 0);
     await doc.save();
   });
@@ -256,7 +256,7 @@ function tests(): void {
   test('interrupt stops a long-running cell and the kernel stays usable', async () => {
     const p = c.kernel.request<ExecuteResult>('execute', { code: 'i = 0\nwhile True:\n    i += 1' });
     await waitFor(() => c.kernel.status === 'busy', 5000, 'busy');
-    await vscode.commands.executeCommand('veil.interrupt');
+    await vscode.commands.executeCommand('vrun.interrupt');
     const r = await p;
     assert.equal(r.interrupted, 'interrupted');
     const again = await c.kernel.request<ExecuteResult>('execute', { code: 'i > 0' });
@@ -265,7 +265,7 @@ function tests(): void {
 
   test('restart invalidates old sessions and variables', async () => {
     const old = c.kernel.session;
-    await vscode.commands.executeCommand('veil.restartKernel');
+    await vscode.commands.executeCommand('vrun.restartKernel');
     assert.notEqual(c.kernel.session, old);
     await assert.rejects(c.kernel.request('variables.inspect', { name: 'df', session: old }), /previous kernel session/);
     const r = await c.kernel.request<ExecuteResult>('execute', { code: "'df' in globals()" });
@@ -274,7 +274,7 @@ function tests(): void {
 
   test('stop terminates the kernel process', async () => {
     const pid = c.kernel.info?.pid;
-    await vscode.commands.executeCommand('veil.stopKernel');
+    await vscode.commands.executeCommand('vrun.stopKernel');
     assert.equal(c.kernel.status, 'stopped');
     assert.ok(pid);
     await sleep(300);
@@ -285,7 +285,7 @@ function tests(): void {
 export function run(): Promise<void> {
   const mocha = new Mocha({ ui: 'tdd', color: true, timeout: 60000 });
   mocha.suite.emit('pre-require', globalThis, 'suite', mocha);
-  suite('Veil (Extension Development Host)', tests);
+  suite('vrun (Extension Development Host)', tests);
   return new Promise((resolve, reject) => {
     mocha.run((failures) => (failures ? reject(new Error(`${failures} test(s) failed`)) : resolve()));
   });

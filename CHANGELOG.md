@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 2026-10-29
+
+### Renamed
+* The extension is now **vrun** (extension id `vrun-local.vrun`, commands
+  `vrun: …`). Settings moved from `veil.*` to `vrun.*`. Uninstall the old
+  `veil-local.veil` extension.
+* New logo: a plain black square with a white play mark; the panel tab no
+  longer shows a logo.
+
+### Changed
+* The run header shows the time at the right edge, and a live run reads
+  `cleaning.py · line 1` instead of `live: line 1`.
+
 ## 0.2.0 — 2026-10-29
 
 ### Renamed

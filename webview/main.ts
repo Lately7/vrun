@@ -1,7 +1,7 @@
 /**
  * Webview entry: a quiet header (kernel state + a few text buttons), tabs and
  * message routing. The DataFrame and Visualizer tabs only exist when enabled
- * in Settings (veil.features.*), so the default panel is just
+ * in Settings (vrun.features.*), so the default panel is just
  * Variables + Output.
  */
 import { handleResponse, rejectAll, send, vscode } from './api';
@@ -187,7 +187,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
       openDataFrame(msg.name);
       break;
     case 'traceStart':
-      visualizer.started(msg.execId, msg.label, msg.mode);
+      visualizer.started(msg.execId, msg.label);
       break;
     case 'traceSuperseded':
       visualizer.superseded(msg.execId);

@@ -24,8 +24,8 @@ export class InspectorPanel implements vscode.Disposable {
   reveal(tab?: PanelTab, preserveFocus = true): void {
     if (!this.panel) {
       this.panel = vscode.window.createWebviewPanel(
-        'veil.inspector',
-        'Veil',
+        'vrun.inspector',
+        'vrun',
         { viewColumn: vscode.ViewColumn.Beside, preserveFocus },
         {
           enableScripts: true,
@@ -33,7 +33,6 @@ export class InspectorPanel implements vscode.Disposable {
           localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')],
         },
       );
-      this.panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'icon.png');
       this.ready = false;
       this.panel.webview.html = this.html(this.panel.webview);
       this.panel.webview.onDidReceiveMessage(
@@ -105,7 +104,7 @@ export class InspectorPanel implements vscode.Disposable {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${style}">
-<title>Veil</title>
+<title>vrun</title>
 </head>
 <body>
 <div id="app"></div>

@@ -1,6 +1,6 @@
-# Veil — data structures & algorithms demo.
-# Put the cursor in a cell and run "Veil: Visualize Algorithm" (Ctrl+Alt+V),
-# or turn on "Veil: Toggle Live Visualize" and edit the input data.
+# vrun — data structures & algorithms demo.
+# Put the cursor in a cell and run "vrun: Visualize Algorithm" (Ctrl+Alt+V),
+# or turn on "vrun: Toggle Live Visualize" and edit the input data.
 
 # %% Bubble sort — bars + index pointers i, j
 arr = [5, 1, 4, 2, 8, 3]

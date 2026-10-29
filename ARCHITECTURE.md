@@ -1,4 +1,4 @@
-# Veil — Architecture
+# vrun — Architecture
 
 ## 1. Component diagram
 
@@ -29,7 +29,7 @@
 
 ## 2. Backend lifecycle
 
-1. `KernelClient.start()` resolves the interpreter (setting `veil.pythonPath`
+1. `KernelClient.start()` resolves the interpreter (setting `vrun.pythonPath`
    → Python extension's active interpreter → `python` on PATH) and spawns
    `python -u <ext>/python/launcher.py` with `shell: false`, an argument array,
    `cwd` = workspace folder, and env additions `PYTHONUNBUFFERED=1`,

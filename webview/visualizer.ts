@@ -35,7 +35,6 @@ export class Visualizer {
   readonly el = h('div', { class: 'visualizer' });
   private trace: TraceResult | undefined;
   private label = '';
-  private mode = 'manual';
   private lineOffset = 0;
   private index = 0;
   private playing: ReturnType<typeof setInterval> | undefined;
@@ -68,9 +67,9 @@ export class Visualizer {
     this.render();
   }
 
-  started(execId: number, label: string, mode: string): void {
+  started(execId: number, label: string): void {
     this.latestExecId = execId;
-    this.busy = mode === 'live' ? `Tracing (live): ${label}…` : `Tracing ${label}…`;
+    this.busy = `Tracing ${label}…`;
     this.renderStatus();
   }
 
@@ -98,7 +97,6 @@ export class Visualizer {
     const keep = mode === 'live' && this.trace !== undefined;
     this.trace = result;
     this.label = label;
-    this.mode = mode;
     this.lineOffset = lineOffset;
     this.stop();
     // Live edits keep the current step so the picture updates in place.
@@ -158,7 +156,7 @@ export class Visualizer {
     const intro = h(
       'div',
       { class: 'viz-intro' },
-      button('▶ Visualize current file / cell', () => send({ type: 'command', command: 'visualize' }), { cls: 'btn primary', title: 'Veil: Visualize Algorithm (Ctrl+Alt+V)' }),
+      button('▶ Visualize current file / cell', () => send({ type: 'command', command: 'visualize' }), { cls: 'btn primary', title: 'vrun: Visualize Algorithm (Ctrl+Alt+V)' }),
       button(this.liveViz ? '● Live visualize: ON' : '○ Live visualize: OFF', () => send({ type: 'command', command: 'toggleLiveVisualize' }), {
         cls: `btn ${this.liveViz ? 'on' : ''}`,
         pressed: this.liveViz,
@@ -225,9 +223,7 @@ export class Visualizer {
         speed,
       ),
     );
-    const meta: string[] = [`${this.label}`, `${t.elapsedMs ?? 0} ms`];
-    if (this.mode === 'live') meta.push('live');
-    this.el.appendChild(h('div', { class: 'muted' }, meta.join(' · ')));
+    this.el.appendChild(h('div', { class: 'run-meta' }, this.label, h('span', { class: 'meta-note' }, `${t.elapsedMs ?? 0} ms`)));
     if (t.stopped) this.el.appendChild(h('p', { class: 'warn-text' }, `Trace stopped early: ${t.stopped}. Steps before that are shown.`));
     if (t.skippedSteps) this.el.appendChild(h('p', { class: 'muted small' }, `${t.skippedSteps} step(s) close to the recursion limit could not be drawn.`));
     if (t.error) this.el.appendChild(h('pre', { class: 'error-text' }, `${t.error.ename}: ${t.error.evalue}${t.error.userFrame ? ` (line ${t.error.userFrame.line + this.lineOffset})` : ''}`));

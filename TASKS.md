@@ -31,7 +31,7 @@ Status legend: ✅ done (with evidence) · ⏳ open
 | 10 | Stale responses dropped | LiveScheduler tests; `stale_handle` / `stale_revision` tests; webview request sequence numbers |
 | 11 | Automated tests | 119 pytest (incl. 37 written by Codex), 53 node:test (incl. 31 by Codex), 8 VS Code integration — all passing |
 | 12 | Large synthetic dataset | 500 k and 1 M rows benchmarked; 200 k-row pytest fixture |
-| 13 | VSIX generated | `veil-0.2.0.vsix` (22 files, 73.5 KB, rebuilt after all Codex rounds), installed into a temp extensions dir |
+| 13 | VSIX generated | `vrun-0.3.0.vsix` (24 files, 87.59 KB), manifest checked (`vrun-local.vrun`), installed into VS Code |
 | 14 | Installation documented | README "Install (local VSIX)" |
 | 15 | Codex implementation + review | see Codex log below |
 

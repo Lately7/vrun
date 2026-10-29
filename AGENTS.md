@@ -35,7 +35,7 @@ npm run typecheck        # tsc --noEmit
 npm test                 # node unit tests (protocol, kernel client against real Python)
 npm run test:py          # pytest python/tests
 npm run test:vscode      # integration tests in an Extension Development Host
-npm run package          # produces veil-<version>.vsix
+npm run package          # produces vrun-<version>.vsix
 python benchmarks/run_benchmarks.py   # see BENCHMARKS.md
 ```
 

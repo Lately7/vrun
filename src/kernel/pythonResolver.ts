@@ -10,12 +10,12 @@ interface PythonExtensionApi {
 
 /**
  * Interpreter selection order:
- * 1. `veil.pythonPath` setting
+ * 1. `vrun.pythonPath` setting
  * 2. the Python extension's active interpreter for the resource
  * 3. `python` on PATH
  */
 export async function resolvePython(resource: vscode.Uri | undefined, log: (s: string) => void): Promise<string> {
-  const configured = vscode.workspace.getConfiguration('veil', resource).get<string>('pythonPath', '').trim();
+  const configured = vscode.workspace.getConfiguration('vrun', resource).get<string>('pythonPath', '').trim();
   if (configured) return configured;
   try {
     const ext = vscode.extensions.getExtension<PythonExtensionApi>('ms-python.python');

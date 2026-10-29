@@ -71,7 +71,7 @@ def main() -> None:
 
 
 HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Veil webview harness</title>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>vrun webview harness</title>
 <link rel="stylesheet" href="../media/webview.css">
 <style>
  :root { --vscode-foreground:#cccccc; --vscode-editor-background:#1e1e1e; --vscode-descriptionForeground:#9d9d9d;

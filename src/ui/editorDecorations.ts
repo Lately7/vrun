@@ -15,7 +15,7 @@ export class EditorDecorations implements vscode.Disposable {
     overviewRulerColor: new vscode.ThemeColor('editorOverviewRuler.infoForeground'),
     overviewRulerLane: vscode.OverviewRulerLane.Center,
   });
-  private readonly diagnostics = vscode.languages.createDiagnosticCollection('veil');
+  private readonly diagnostics = vscode.languages.createDiagnosticCollection('vrun');
   /** uri -> line -> inline text */
   private inline = new Map<string, Map<number, string>>();
 
@@ -43,7 +43,7 @@ export class EditorDecorations implements vscode.Disposable {
     return new Map(this.inline.get(doc.uri.toString()) ?? []);
   }
 
-  /** "Veil: Clear Inline Results": remove every note in every editor. */
+  /** "vrun: Clear Inline Results": remove every note in every editor. */
   clearAllInline(): void {
     this.inline.clear();
     for (const editor of vscode.window.visibleTextEditors) editor.setDecorations(this.resultType, []);
@@ -80,7 +80,7 @@ export class EditorDecorations implements vscode.Disposable {
       range = new vscode.Range(line, Math.max(0, f.col - 1), line, Math.min(text.text.length, f.endCol - 1));
     }
     const d = new vscode.Diagnostic(range, `${err.ename}: ${err.evalue}`, vscode.DiagnosticSeverity.Error);
-    d.source = 'Veil';
+    d.source = 'vrun';
     this.diagnostics.set(doc.uri, [d]);
   }
 
