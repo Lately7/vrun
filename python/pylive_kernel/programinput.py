@@ -18,10 +18,41 @@ NO_INPUT_HINT = (
 )
 
 
+class _BinaryView:
+    """``sys.stdin.buffer`` for fast-IO idioms (``sys.stdin.buffer.read()``).
+
+    Reads consume the same text stream, so mixing input() and buffer reads
+    behaves like one file.
+    """
+
+    def __init__(self, text: io.StringIO) -> None:
+        self._text = text
+
+    def read(self, size: int = -1) -> bytes:
+        return self._text.read(size).encode("utf-8")
+
+    def readline(self, size: int = -1) -> bytes:
+        return self._text.readline(size).encode("utf-8")
+
+    def readlines(self) -> list[bytes]:
+        return [line.encode("utf-8") for line in self._text.readlines()]
+
+    def __iter__(self) -> Any:
+        return iter(self.readlines())
+
+
+class InputStream(io.StringIO):
+    """Text stream of the program input, with a binary ``buffer`` view."""
+
+    @property
+    def buffer(self) -> _BinaryView:  # type: ignore[override]
+        return _BinaryView(self)
+
+
 class ProgramInput:
     def __init__(self, text: str | None) -> None:
         self.provided = text is not None
-        self.stream = io.StringIO(text if text is not None else "")
+        self.stream = InputStream(text if text is not None else "")
 
     def input(self, prompt: object = "") -> str:
         if not self.provided:

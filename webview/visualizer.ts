@@ -25,6 +25,7 @@ interface TraceResult {
   error: { ename: string; evalue: string; traceback: string; userFrame: { line: number } | null } | null;
   stdout: string;
   stdoutTruncated?: boolean;
+  skippedSteps?: number;
   elapsedMs?: number;
   source?: string;
   analysis?: { findings: Array<{ line: number; message: string }> };
@@ -228,6 +229,7 @@ export class Visualizer {
     if (this.mode === 'live') meta.push('live');
     this.el.appendChild(h('div', { class: 'muted' }, meta.join(' · ')));
     if (t.stopped) this.el.appendChild(h('p', { class: 'warn-text' }, `Trace stopped early: ${t.stopped}. Steps before that are shown.`));
+    if (t.skippedSteps) this.el.appendChild(h('p', { class: 'muted small' }, `${t.skippedSteps} step(s) close to the recursion limit could not be drawn.`));
     if (t.error) this.el.appendChild(h('pre', { class: 'error-text' }, `${t.error.ename}: ${t.error.evalue}${t.error.userFrame ? ` (line ${t.error.userFrame.line + this.lineOffset})` : ''}`));
     if (!step) return;
 

@@ -109,6 +109,8 @@ class Recorder:
         self.ids: dict[int, int] = {}
         self.keepalive: list[object] = []
         self.calls = 0
+        self.skipped_deep = 0  # snapshots skipped near the recursion limit
+        self.near_limit = False  # the stack came close to sys.getrecursionlimit()
 
     # sys.settrace entry point: only trace frames of the traced source.
     def global_trace(self, frame: types.FrameType, event: str, arg: Any) -> Any:
@@ -124,7 +126,13 @@ class Recorder:
         if self.stopped:
             raise TraceLimit(self.stopped)
         if event in ("line", "return", "exception"):
-            self._record(frame, event, arg)
+            try:
+                self._record(frame, event, arg)
+            except RecursionError:
+                # The program runs close to its recursion limit and encoding a
+                # snapshot needs a few more frames. Raising here would make
+                # CPython switch tracing off silently, so skip this snapshot.
+                self.skipped_deep += 1
         return self.local_trace
 
     def _stop(self, reason: str) -> None:
@@ -142,6 +150,15 @@ class Recorder:
             frames.append(f)
             f = f.f_back
         frames.reverse()
+        # Remember deep stacks: if CPython later switches tracing off, this
+        # tells a recursion-limit stop apart from a program calling settrace.
+        depth = len(frames)
+        g = f
+        while g is not None:
+            depth += 1
+            g = g.f_back
+        if depth >= sys.getrecursionlimit() - 50:
+            self.near_limit = True
         enc = HeapEncoder(max_nodes=self.max_nodes, max_items=self.max_items,
                           ids=self.ids, keepalive=self.keepalive)
         stack = []
@@ -217,6 +234,15 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
     except BaseException as exc:  # noqa: BLE001 - user errors are part of the trace
         error = format_exception(exc, {TRACE_FILE})
     finally:
+        # At the recursion limit CPython cannot even call the trace function
+        # and switches tracing off by itself (hooks need frames too, so it
+        # cannot be turned back on reliably). Say so instead of silently
+        # showing a trace that ends early.
+        if sys.gettrace() is None and not rec.stopped and error is None:
+            rec.stopped = (
+                "tracing stopped at the recursion limit; later steps are not shown"
+                if rec.near_limit else
+                "the program switched tracing off (sys.settrace); later steps are not shown")
         sys.settrace(None)
         sys.stdout, sys.stderr = old_out, old_err
         swap.__exit__()
@@ -225,8 +251,10 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
         "steps": rec.steps,
         "stopped": rec.stopped,
         "error": error,
-        "stdout": out.getvalue(),
+        # Make truncation visible in the text itself, not only as a flag.
+        "stdout": out.getvalue() + ("\n… output truncated (200 000 characters shown)\n" if out.truncated else ""),
         "stdoutTruncated": out.truncated,
+        "skippedSteps": rec.skipped_deep,
         "elapsedMs": round(elapsed * 1000, 1),
         "source": code,
     }

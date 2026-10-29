@@ -96,6 +96,10 @@ lineOffset, mode, execId}) → worker queue → ast.parse → (live: safety chec
   `while True`). Live runs have a time budget (default 5 s) enforced by a real
   interrupt. At most one live request per document is in flight; edits that
   arrive meanwhile are coalesced into one follow-up request (backpressure).
+* **Load once** (ADR-007): live cells execute statement by statement; data
+  loads run once and are later restored from a snapshot copy.
+* **Program input**: the host sends the text of `<script>.in` as `stdin` with
+  `execute`/`trace`; `input()` and `sys.stdin` read it.
 * **Live Visualize** (DSA): same debounce/coalescing, but issues `trace`.
 * Every request carries an `execId`; each document has a monotonically
   increasing live generation. Responses for older generations are discarded.

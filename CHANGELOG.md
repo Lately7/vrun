@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+* Live Mode loads data once and restores it from a snapshot (ADR-007); turning
+  Live on starts the kernel and runs immediately.
+* Program input: `<script>.in` feeds `input()`/`sys.stdin`; *PyLive: Edit
+  Program Input*.
+* Visualizer: linked lists / trees inside wrapper classes, heaps and queues of
+  tuples; quieter number line and call stack.
+
+### Changed
+* Output shows only the latest run.
+* Integration tests run from paths with spaces.
+
 ## 0.1.0 — 2026-10-28 (MVP)
 
 ### Added

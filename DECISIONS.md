@@ -64,6 +64,26 @@ callback gives frames with locals uniformly on 3.12–3.15 and per-line cost is
 acceptable under a step budget. Limits are enforced by raising from the trace
 function, which stops the traced code deterministically.
 
+## ADR-007 — Live Mode loads data once, from a snapshot
+
+**Context.** Pandas scripts start with `df = pd.read_excel(...)`. Re-reading on
+every keystroke lags (seconds for a 500 k-row workbook); refusing the cell
+made Live Mode useless for preprocessing.
+
+**Decision.** Live cells run statement by statement. A statement whose only
+side effect is a data load (`read_*`, `np.load*`) runs the first time; its
+bindings are snapshotted. Later live runs rebind a *fresh copy* of the
+snapshot instead of re-reading, so the following preprocessing always starts
+from the data as loaded (re-using the mutated object would apply
+non-idempotent steps such as `df["x"] *= 1.1` again on every run). The load
+key covers the statement's AST and the values of the simple names it reads,
+so editing the path re-reads. First-time loads are excluded from the live
+time budget. Implemented by Codex; the snapshot design came out of review.
+
+**Trade-offs.** One extra copy in memory (near zero with pandas
+copy-on-write); file changes on disk are not detected; objects without a safe
+copy rule are re-loaded each time.
+
 ## Rejected alternatives
 
 * Automatic dependency-aware re-execution (out of MVP scope; Python's mutable

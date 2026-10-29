@@ -524,7 +524,12 @@ export class PyLiveController implements vscode.Disposable {
     if (text === undefined) {
       try {
         text = fs.readFileSync(inPath, 'utf8');
-      } catch {
+      } catch (err) {
+        // A missing .in file is normal; anything else (permissions, a folder
+        // named solution.in) must not turn into the "create a .in file" hint.
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          void vscode.window.showWarningMessage(`PyLive: could not read program input ${path.basename(inPath)}: ${(err as Error).message}`);
+        }
         return undefined;
       }
     }

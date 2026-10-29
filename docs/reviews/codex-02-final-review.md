@@ -108,3 +108,31 @@ background thread after its run ended stayed buffered until the next run —
 fixed with a 100 ms flush loop (`test_background_output_while_its_run_is_latest_keeps_exec_id`).
 The webview previously appended `execId: null` output to the newest run; it now
 has a separate "Background output" block.
+
+## Round 5 — "load once" for Live Mode (Codex implemented, Claude reviewed)
+
+Codex implemented statement-by-statement live execution, a load-statement
+category in the AST check, input-sensitive load keys and a live time budget
+that spares first-time loads. Review found one high-severity defect: a skipped
+load reused the object *after* the previous run's preprocessing mutated it, so
+non-idempotent steps (`df["price"] *= 1.1`, `dropna(inplace=True)`) were
+applied again on every keystroke. Codex agreed and added snapshot restore
+(fresh copy per run, copy-on-write aware), cached last-expression values, one
+snapshot per statement slot, and tests on real temp files. Measured on 541,909
+rows: first live run 165 ms (reads), later runs 60–67 ms (reuse), identical
+results across runs.
+
+## Round 6 — learner-experience QA (Codex wrote `python/tests/test_codex_learner.py`)
+
+30 student-style tests (DSA and pandas preprocessing), 7 failures:
+`defaultdict(list)` graphs not expanded (fixed), NumPy 2 `np.int64(6)` shown
+instead of `6` in five results (fixed: plain numbers in result reprs), and
+tracing after `sys.setrecursionlimit` + caught `RecursionError`.
+**Disagreement**: Codex expected tracing to continue after the limit; Claude
+showed that CPython disables both `settrace` and `setprofile` hooks there, so
+the trace now ends with an explicit reason instead. Codex agreed, as it did
+on the visible output-truncation marker it had itself suggested. Its review
+of Claude's changes found 5 defects (no `sys.stdin.buffer`, misleading stop
+reason after a user `sys.settrace(None)`, all `.in` read errors treated as
+"missing", temp-dir leaks and space-containing temp dirs in `runTest.ts`) —
+all fixed with tests.

@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as _dt
 import decimal
 import math
+import sys
 from typing import Any
 
 MAX_SAFE_INT = 2**53 - 1
@@ -229,3 +230,35 @@ def safe_repr(value: object, limit: int = 2000) -> str:
     if len(text) > limit:
         return text[:limit] + f"… ({len(text) - limit} more chars)"
     return text
+
+
+def _plain_numbers(value: object, depth: int = 0) -> object:
+    """Replace NumPy numeric scalars by Python numbers inside small containers.
+
+    NumPy 2 prints ``np.int64(6)`` where learners expect ``6``. Only exact
+    builtin containers are rebuilt (no user __iter__/__repr__ runs); the
+    result is only used for display.
+    """
+    np = sys.modules.get("numpy")
+    if np is None:
+        return value
+    t = type(value)
+    if issubclass(t, (np.integer, np.floating, np.bool_, np.complexfloating)):
+        return value.item()  # type: ignore[attr-defined]
+    if depth >= 3:
+        return value
+    if t in (list, tuple) and len(value) <= 200:  # type: ignore[arg-type]
+        items = [_plain_numbers(x, depth + 1) for x in value]  # type: ignore[attr-defined]
+        return items if t is list else tuple(items)
+    if t is dict and len(value) <= 200:  # type: ignore[arg-type]
+        return {_plain_numbers(k, depth + 1): _plain_numbers(v, depth + 1) for k, v in dict.items(value)}  # type: ignore[arg-type]
+    return value
+
+
+def friendly_repr(value: object, limit: int = 4000) -> str:
+    """repr() for results the user evaluated, with NumPy scalars shown plainly."""
+    try:
+        shown = _plain_numbers(value)
+    except Exception:  # noqa: BLE001 - display helper must never fail a run
+        shown = value
+    return safe_repr(shown, limit)

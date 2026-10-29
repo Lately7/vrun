@@ -15,7 +15,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Any
 
-from .serialize import safe_repr, short_type_name, type_module, type_name, type_qualname
+from .serialize import friendly_repr, safe_repr, short_type_name, type_module, type_name, type_qualname
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_FIGURES = 8
@@ -172,7 +172,7 @@ def describe_result(value: object) -> dict[str, Any]:
     info: dict[str, Any] = {
         "type": type_name(value),
         "shortType": short_type_name(value),
-        "repr": safe_repr(value, 4000),
+        "repr": friendly_repr(value, 4000),
     }
     t = type(value)
     name = type_qualname(t)

@@ -12,7 +12,9 @@ pointers, number lines, graphs, trees, linked lists and DP tables.
 |---|---|
 | Persistent kernel | One long-running Python process per window. Variables and imports survive between runs. stdout/stderr captured, tracebacks mapped to your file's lines, status `idle / busy / interrupting / crashed`. |
 | Execution | Run Selection, Run Cell (`# %%` cells), Run File. Expression results are shown inline in the editor (`⇒ value`) and in the Output tab. Errors are underlined in the editor. |
-| Live Mode (opt-in) | After you stop typing (800 ms), re-runs `# %% [live]` cells — or the cell under the cursor. Code with model training, file/network I/O, `while True`, `input()`… is never re-run automatically (AST heuristic). Each live run has a 5 s budget enforced by a real interrupt. |
+| Live Mode (opt-in) | Turning it on runs once right away (starting the kernel if needed); then, after you stop typing (800 ms), re-runs `# %% [live]` cells — or the cell under the cursor. **Data is loaded once**: `pd.read_csv/read_excel/...`, `np.load/loadtxt` run the first time only; later runs restore a fresh copy of what they loaded, so preprocessing such as `df["price"] *= 1.1` is never applied twice. A load re-runs when you edit its line or a variable it uses (e.g. the path). Model training, writing files, network, `while True` are never re-run automatically (AST heuristic). Each live run has a 5 s budget (first-time loads excluded) enforced by a real interrupt. |
+| Program input | For judge-style exercises, `input()` and `sys.stdin` read `<script>.in` next to the script (`solution.py` → `solution.in`); *PyLive: Edit Program Input* creates/opens it. Editing the `.in` file re-runs Live. |
+| Output | Shows the latest run only; a new run replaces the previous result. |
 | Safe ML | Re-running a cell that trains a model (`.fit`, `GridSearchCV`, `cross_val_score`, `.train()` …) asks for confirmation if it already ran in this kernel session. `# pylive: manual` in a cell excludes it from Live Mode. |
 | Variables | Name, type, shape/len, dtype(s), short value, shallow memory size. No `repr()` is called on unknown objects; DataFrame metadata never scans the data. Expand lists/dicts/objects, open DataFrames, draw structures. |
 | DataFrame viewer | The frame stays in the kernel. Pages of 25–500 rows, column windows for wide frames, dtype colours, NaN/NaT/None/<NA> rendered distinctly, **full-data** sort and filter (clearly labelled), on-demand missing-value % and statistics, per-column top values, copy cell/row. |
@@ -114,6 +116,12 @@ Design and measurements are documented in the repository: `ARCHITECTURE.md`,
 
 ## Known limitations
 
+* **Load once** keys a data load by its code and the values of the simple
+  variables it uses (paths, numbers). It does not notice that the file on
+  disk changed: use *Run Cell* to re-read. Reused data costs one extra copy in
+  memory (cheap with pandas copy-on-write, the default in pandas 3). Loads
+  whose result cannot be copied safely are re-run every time.
+
 * **Interrupt** raises `KeyboardInterrupt` between Python bytecodes. A single
   long native call (big NumPy/pandas operation, `time.sleep` on Windows) or
   code that swallows `KeyboardInterrupt` cannot be interrupted; PyLive then
@@ -125,8 +133,9 @@ Design and measurements are documented in the repository: `ARCHITECTURE.md`,
   visible to it and not modified), but imports and module-level side effects
   are shared with the kernel process. Large programs are cut off at
   `trace.maxSteps` / size / time limits. Only user-defined classes and
-  built-in containers are expanded; library objects are shown by type name.
-  `input()` is not supported.
+  built-in containers (plus `defaultdict`, `Counter`, `OrderedDict`) are
+  expanded; library objects are shown by type name. `input()` reads the
+  `<script>.in` file.
 * Sort/filter caches live for one execution count only; a background thread
   that mutates a DataFrame between executions can make a page inconsistent.
 * Output printed by background threads is attributed to the run that started

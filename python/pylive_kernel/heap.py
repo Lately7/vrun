@@ -39,6 +39,11 @@ _SEQ_KINDS: dict[type, str] = {
     collections.deque: "deque",
 }
 
+# Standard-library dict subclasses that DSA code uses constantly
+# (defaultdict(list) graphs, Counter frequencies). Their items are read with
+# dict.items at C level, so no user code runs.
+DICT_TYPES = (dict, collections.defaultdict, collections.OrderedDict, collections.Counter)
+
 USER_MODULES = {"__main__", "__pylive_trace__"}
 
 _SCALAR_TYPES = (int, float, bool, str, complex, bytes, type(None))
@@ -87,7 +92,7 @@ class HeapEncoder:
 
     def _expandable(self, obj: object) -> bool:
         t = type(obj)
-        if t in _SEQ_KINDS or t is dict:
+        if t in _SEQ_KINDS or t in DICT_TYPES:
             return True
         if type_module(t) in USER_MODULES and not is_class(obj):
             return True
@@ -121,7 +126,7 @@ class HeapEncoder:
 
     def _node(self, obj: object) -> dict[str, Any]:
         t = type(obj)
-        if t is dict:
+        if t in DICT_TYPES:
             d: dict[Any, Any] = obj  # type: ignore[assignment]
             entries = []
             for i, (k, val) in enumerate(dict.items(d)):
@@ -291,7 +296,7 @@ def viz_hint(obj: object) -> str | None:
         return "array"
     if t in (set, frozenset):
         return "numberline" if all(type(x) in (int, float) for x in list(obj)[:20]) else "array"  # type: ignore[call-overload]
-    if t is dict:
+    if t in DICT_TYPES:
         d: dict[Any, Any] = obj  # type: ignore[assignment]
         vals = list(dict.values(d))[:20]
         if vals and all(type(v) in (list, set, tuple, dict) for v in vals):

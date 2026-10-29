@@ -73,7 +73,7 @@ function tests(): void {
     // Persistence: a new execution reuses df without re-running the file.
     const r = await c.kernel.request<ExecuteResult>('execute', { code: 'df["Quantity"].median()' });
     assert.equal(r.status, 'ok');
-    assert.equal(r.value?.repr, 'np.float64(24.5)');
+    assert.equal(r.value?.repr, '24.5'); // NumPy scalars are shown as plain numbers
   });
 
   test('Run Cell runs only the cell under the cursor', async () => {
@@ -136,11 +136,11 @@ function tests(): void {
       const r = await c.kernel.request<ExecuteResult>('execute', { code: "globals().get('total')" });
       return r.value?.repr === expected;
     };
-    await waitFor(totalIs('np.int64(6)'), 15000, 'first live run');
+    await waitFor(totalIs('6'), 15000, 'first live run');
     // If Live re-read the file now, it would fail: the file is gone.
     fs.unlinkSync(csv);
     await editor.edit((e) => e.replace(doc.lineAt(2).range, 'total = df["v"].sum() * 10'));
-    await waitFor(totalIs('np.int64(60)'), 15000, 'live re-run without re-reading');
+    await waitFor(totalIs('60'), 15000, 'live re-run without re-reading');
     await vscode.commands.executeCommand('pylive.toggleLiveMode');
     await doc.save();
   });

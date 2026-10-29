@@ -92,3 +92,18 @@ def test_zero_dim_and_structured_arrays(kernel):
     assert z["heap"][str(z["root"]["ref"])]["value"] == 7
     rec = kernel.call("variables.inspect", name="rec")["result"]
     assert rec["heap"][str(rec["root"]["ref"])]["items"][0] == {"$t": "record", "v": "(1, 2.5)"}
+
+
+def test_stdin_buffer_fast_io(kernel):
+    r = kernel.run("import sys\ndata = sys.stdin.buffer.read().split()\nsum(map(int, data))", stdin="1 2\n3\n")
+    assert r["value"]["repr"] == "6"
+
+
+def test_trace_reports_why_tracing_stopped():
+    from pylive_kernel import tracer
+
+    r = tracer.run_trace("import sys\nsys.settrace(None)\nx = 1\n")
+    assert r["stopped"] and "switched tracing off" in r["stopped"]
+    r = tracer.run_trace("import sys\nsys.setrecursionlimit(80)\ndef d(n):\n    return d(n + 1)\ntry:\n    d(0)\nexcept RecursionError:\n    pass\n")
+    sys_limit_note = r["stopped"] or ""
+    assert "recursion limit" in sys_limit_note

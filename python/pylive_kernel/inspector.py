@@ -39,6 +39,8 @@ def _kind(value: object) -> str:
         return "str"
     if t in (list, tuple, set, frozenset, dict, collections.deque):
         return t.__name__
+    if t in (collections.defaultdict, collections.OrderedDict, collections.Counter):
+        return "dict"
     if mod.startswith("pandas"):
         if name == "DataFrame":
             return "dataframe"

@@ -263,6 +263,10 @@ class _StdinProxy:
     def readlines(self, *args: Any) -> list[str]:
         return self._stream().readlines(*args)
 
+    @property
+    def buffer(self) -> Any:
+        return self._stream().buffer
+
     def __iter__(self) -> Any:
         return iter(self._stream())
 
