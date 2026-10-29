@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { cellAt, dedent, splitCells } from '../../src/exec/cells';
 import { LiveScheduler } from '../../src/exec/liveScheduler';
+import { inputPathFor, isInputOf } from '../../src/exec/programInput';
 import { parseWorkerLine } from '../../src/kernel/protocol';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -134,5 +135,14 @@ describe('webview message validation', () => {
     for (const raw of [null, 1, 'x', [], { type: 'nope' }, { type: 'copy', text: 5 }, { type: 'traceStep', line: 0 }]) {
       assert.equal(validateWebviewMessage(raw), undefined);
     }
+  });
+});
+
+describe('program input paths', () => {
+  it('maps solution.py to solution.in next to it', () => {
+    assert.equal(inputPathFor(join('a', 'b', 'solution.py')), join('a', 'b', 'solution.in'));
+    assert.equal(inputPathFor(join('a', 'run')), join('a', 'run.in'));
+    assert.ok(isInputOf(join('a', 'solution.in'), join('a', 'solution.py')));
+    assert.ok(!isInputOf(join('a', 'other.in'), join('a', 'solution.py')));
   });
 });

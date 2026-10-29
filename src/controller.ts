@@ -1,8 +1,10 @@
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { Cell, cellAt, dedent, hasCellMarkers, splitCells } from './exec/cells';
 import { LiveScheduler } from './exec/liveScheduler';
+import { MAX_PROGRAM_INPUT_CHARS, inputPathFor, isInputOf, samePath } from './exec/programInput';
 import { KernelClient } from './kernel/kernelClient';
 import {
   ExecuteResult,
@@ -302,6 +304,8 @@ export class PyLiveController implements vscode.Disposable {
       execId,
     };
     if (mode === 'live') params.timeoutMs = cfg().get<number>('live.timeoutMs', 5000);
+    const stdin = this.programInput(doc);
+    if (stdin !== undefined) params.stdin = stdin;
     if (mode === 'manual') this.manualRunning++;
     let result: ExecuteResult;
     try {
@@ -379,26 +383,33 @@ export class PyLiveController implements vscode.Disposable {
 
   // ------------------------------------------------------------ live mode
 
-  toggleLiveMode(): void {
+  async toggleLiveMode(): Promise<void> {
     const doc = this.targetEditor()?.document;
     if (!doc || doc.languageId !== 'python') {
       void vscode.window.showInformationMessage('PyLive: open a Python file to use Live Mode.');
       return;
     }
     const key = doc.uri.toString();
+    const sk = `exec:${key}`;
     if (this.liveDocs.delete(key)) {
-      this.scheduler.cancel(`exec:${key}`);
-      void vscode.window.setStatusBarMessage('PyLive: Live Mode OFF', 2500);
-    } else {
-      this.liveDocs.add(key);
-      const hasLive = splitCells(doc.getText()).some((c) => c.live);
-      void vscode.window.showInformationMessage(
-        hasLive
-          ? 'PyLive Live Mode ON: cells marked "# %% [live]" re-run after you stop typing.'
-          : 'PyLive Live Mode ON: the cell under the cursor re-runs after you stop typing. Model training, file/network I/O and endless loops are never re-run automatically.',
-      );
+      this.scheduler.cancel(sk);
+      this.deferredLive.delete(sk);
+      void vscode.window.setStatusBarMessage('PyLive: Live off', 2500);
+      this.panel.post({ type: 'liveState', live: false, liveViz: this.liveVizDocs.has(key) });
+      return;
     }
-    this.panel.post({ type: 'liveState', live: this.liveDocs.has(key), liveViz: this.liveVizDocs.has(key) });
+    this.liveDocs.add(key);
+    this.panel.post({ type: 'liveState', live: true, liveViz: this.liveVizDocs.has(key) });
+    void vscode.window.setStatusBarMessage('PyLive: Live on — data is loaded once, the rest re-runs as you type', 4000);
+    // Turning Live on is an explicit request: start the kernel if needed
+    // (live edits never start one on their own) and run once right away,
+    // so data files are read now instead of on the first keystroke.
+    try {
+      await this.ensureKernel();
+    } catch {
+      return;
+    }
+    if (this.liveDocs.has(key)) this.scheduler.schedule(sk, (gen) => this.runLive(doc, sk, gen));
   }
 
   toggleLiveVisualize(): void {
@@ -478,6 +489,10 @@ export class PyLiveController implements vscode.Disposable {
 
   private onDocumentChanged(e: vscode.TextDocumentChangeEvent): void {
     if (e.contentChanges.length === 0) return;
+    if (e.document.uri.scheme === 'file' && e.document.uri.fsPath.toLowerCase().endsWith('.in')) {
+      this.onProgramInputChanged(e.document.uri.fsPath);
+      return;
+    }
     const doc = e.document;
     const key = doc.uri.toString();
     // Inline notes are keyed by line number: an edit invalidates the notes of
@@ -496,6 +511,52 @@ export class PyLiveController implements vscode.Disposable {
       const sk = `trace:${key}`;
       this.scheduler.schedule(sk, (gen) => this.traceDocument(doc, 'live', () => this.scheduler.isCurrent(sk, gen)));
     }
+  }
+
+  // ---------------------------------------------------------- program input
+
+  /** Text of `<script>.in` (open editor content first, else the file on disk). */
+  private programInput(doc: vscode.TextDocument): string | undefined {
+    if (doc.uri.scheme !== 'file') return undefined;
+    const inPath = inputPathFor(doc.uri.fsPath);
+    const open = vscode.workspace.textDocuments.find((d) => d.uri.scheme === 'file' && samePath(d.uri.fsPath, inPath));
+    let text: string | undefined = open?.getText();
+    if (text === undefined) {
+      try {
+        text = fs.readFileSync(inPath, 'utf8');
+      } catch {
+        return undefined;
+      }
+    }
+    return text.length > MAX_PROGRAM_INPUT_CHARS ? text.slice(0, MAX_PROGRAM_INPUT_CHARS) : text;
+  }
+
+  /** Editing solution.in re-runs solution.py when Live (Visualize) is on for it. */
+  private onProgramInputChanged(inputPath: string): void {
+    for (const doc of vscode.workspace.textDocuments) {
+      if (doc.uri.scheme !== 'file' || !isInputOf(inputPath, doc.uri.fsPath)) continue;
+      const key = doc.uri.toString();
+      if (this.liveDocs.has(key)) {
+        const sk = `exec:${key}`;
+        this.scheduler.schedule(sk, (gen) => this.runLive(doc, sk, gen));
+      }
+      if (this.liveVizDocs.has(key)) {
+        const sk = `trace:${key}`;
+        this.scheduler.schedule(sk, (gen) => this.traceDocument(doc, 'live', () => this.scheduler.isCurrent(sk, gen)));
+      }
+    }
+  }
+
+  /** "PyLive: Edit Program Input": open (creating if needed) `<script>.in`. */
+  async editProgramInput(): Promise<void> {
+    const doc = this.targetEditor()?.document;
+    if (!doc || doc.languageId !== 'python' || doc.uri.scheme !== 'file') {
+      void vscode.window.showInformationMessage('PyLive: open a saved Python file first.');
+      return;
+    }
+    const inPath = inputPathFor(doc.uri.fsPath);
+    if (!fs.existsSync(inPath)) fs.writeFileSync(inPath, '');
+    await vscode.window.showTextDocument(vscode.Uri.file(inPath), { viewColumn: vscode.ViewColumn.Beside, preview: false });
   }
 
   private liveTargets(doc: vscode.TextDocument): Cell[] {
@@ -559,6 +620,7 @@ export class PyLiveController implements vscode.Disposable {
       return;
     }
     const execId = ++this.execCounter;
+    const stdin = this.programInput(doc);
     this.panel.post({ type: 'traceStart', execId, label: scope.label, mode });
     try {
       const result = await this.kernel.request<TraceResult>('trace', {
@@ -567,6 +629,7 @@ export class PyLiveController implements vscode.Disposable {
         execId,
         maxSteps: cfg().get<number>('trace.maxSteps', 1000),
         timeoutMs: cfg().get<number>('trace.timeoutMs', 15000),
+        ...(stdin !== undefined ? { stdin } : {}),
       });
       if (isCurrent && !isCurrent()) {
         // A newer edit superseded this trace; let the UI drop its "Tracing…" state.

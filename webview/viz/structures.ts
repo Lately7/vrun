@@ -6,7 +6,7 @@ import { button, h } from '../dom';
 import { Encoded, Heap, HeapNode, isRef, numeric } from '../format';
 import { renderArray } from './arrayView';
 import { renderChart } from './chartView';
-import { Var, allNumeric, node, shortScalar } from './common';
+import { Var, allNumeric, isPointerName, node, shortScalar } from './common';
 import { isAdjacency, renderGraph } from './graphView';
 import { renderMatrix } from './matrixView';
 import { Mark, renderNumberLine } from './numberLine';
@@ -19,6 +19,7 @@ export interface StructureState {
 }
 
 const HEAP_NAME = /(^|_)(heap|pq|minheap|maxheap|priority_queue)$/i;
+const QUEUE_NAME = /^(q|queue|stack|st|frontier|todo|to_visit|dq|open|open_set)$/i;
 const ROOT_NAME = /^(root|tree|head|lst|linked|ll|graph|g|adj)$/i;
 
 function card(title: string, subtitle: string, body: Node, tools?: Node): HTMLElement {
@@ -72,7 +73,7 @@ function rowsOf(n: HeapNode, heap: Heap): Encoded[][] | undefined {
 
 export function renderStructures(vars: Var[], heap: Heap, prevHeap: Heap | undefined, state: StructureState, rerender: () => void): HTMLElement {
   const root = h('div', { class: 'viz-grid' });
-  const marks: Mark[] = [];
+  let marks: Mark[] = [];
   const covered = new Set<number>();
   const drawnRefs = new Set<number>();
 
@@ -110,7 +111,14 @@ export function renderStructures(vars: Var[], heap: Heap, prevHeap: Heap | undef
     }
   }
 
-  if (marks.length) {
+  // Index variables already drawn as pointers on an array or as the
+  // highlighted cell of a matrix would only repeat themselves here.
+  if (root.querySelector('table.matrix, svg[aria-label^="array"]')) {
+    marks = marks.filter((m) => !(Number.isInteger(m.value) && isPointerName(m.label)));
+  }
+  // A lone loop counter on a number line says nothing; two or more values
+  // (lo/mid/hi, target/sum) are worth placing on the line.
+  if (marks.length >= 2) {
     root.prepend(card('Number line', `${marks.length} numeric variable${marks.length > 1 ? 's' : ''}`, renderNumberLine(marks, [], 'number line of numeric variables')));
   }
   if (!root.childElementCount) root.appendChild(h('p', { class: 'muted' }, 'No variables to draw at this step yet.'));
@@ -137,6 +145,20 @@ function renderOne(
       reachable(ref, heap, covered);
       return card(v.name, `linked list (${n.type})`, renderLinkedList(ref, heap, vars, `linked list ${v.name}`));
     }
+    // Course-style wrappers (LinkedList with .head, BST with .root): draw the
+    // structure held in the field rather than a one-row field table.
+    for (const [field, val] of n.fields ?? []) {
+      const inner = node(heap, val);
+      if (!isRef(val) || !inner) continue;
+      if (isTreeNode(inner)) {
+        reachable(val.ref, heap, covered);
+        return card(`${v.name}.${field}`, `tree (${inner.type}) in ${n.type}`, renderTree(val.ref, heap, vars, `tree ${v.name}.${field}`));
+      }
+      if (isListNode(inner)) {
+        reachable(val.ref, heap, covered);
+        return card(`${v.name}.${field}`, `linked list (${inner.type}) in ${n.type}`, renderLinkedList(val.ref, heap, vars, `linked list ${v.name}.${field}`));
+      }
+    }
     const rows = (n.fields ?? []).map(([k, val]) => h('tr', {}, h('th', {}, k), h('td', {}, shortScalar(val, heap))));
     return card(v.name, `${n.type} object`, h('table', { class: 'kv' }, ...rows));
   }
@@ -150,9 +172,12 @@ function renderOne(
   }
   const items = n.items ?? [];
   const total = n.len ?? items.length;
-  // Edge lists are pairs too, but they are not y = f(x) data.
-  const pts = /edge/i.test(v.name) ? undefined : pairs(items, heap);
-  const rows = !pts ? rowsOf(n, heap) : undefined;
+  // Queues and stacks hold items to process (often (row, col) tuples), and
+  // edge lists hold pairs too: neither is y = f(x) data or a table.
+  const queueLike = n.kind === 'deque' || QUEUE_NAME.test(v.name);
+  const pts = /edge/i.test(v.name) || queueLike ? undefined : pairs(items, heap);
+  const heapNamed = HEAP_NAME.test(v.name);
+  const rows = !pts && !heapNamed && !queueLike ? rowsOf(n, heap) : undefined;
   if (rows && rows.length && rows.some((r) => r.length > 0)) {
     const prevRows = prev ? rowsOf(prev, heap) : undefined;
     return card(v.name, `${n.kind} ${rows.length}×${Math.max(...rows.map((r) => r.length))}`, renderMatrix(v.name, rows, prevRows, vars, heap));
@@ -160,7 +185,7 @@ function renderOne(
   const numericItems = allNumeric(items);
   const defaultMode: ArrayMode = pts ? 'chart' : HEAP_NAME.test(v.name) ? 'heap' : n.kind === 'set' && numericItems ? 'numberline' : numericItems ? 'bars' : 'cells';
   const mode = state.modes.get(v.name) ?? defaultMode;
-  const modes: ArrayMode[] = pts ? ['chart', 'cells'] : numericItems ? ['bars', 'cells', 'chart', 'numberline', 'heap'] : ['cells'];
+  const modes: ArrayMode[] = pts ? ['chart', 'cells'] : numericItems ? ['bars', 'cells', 'chart', 'numberline', 'heap'] : heapNamed ? ['heap', 'cells'] : ['cells'];
   const tools =
     modes.length > 1
       ? h(
@@ -178,7 +203,7 @@ function renderOne(
   if (mode === 'chart' && pts) body = renderChart(pts, v.name);
   else if (mode === 'chart' && numericItems) body = renderChart(items.map((x, i) => [i, numeric(x)!]), `${v.name} by index`);
   else if (mode === 'numberline' && numericItems) body = renderNumberLine([], items.map((x) => numeric(x)!), `${v.name} on a number line`);
-  else if (mode === 'heap' && items.length) body = h('div', { class: 'stack' }, renderHeapArray(items, `${v.name} as heap`), renderArray({ name: v.name, items, total, prevItems: prev?.items, vars, mode: 'cells' }));
-  else body = renderArray({ name: v.name, items, total, prevItems: prev?.items, vars, mode: mode === 'bars' ? 'bars' : 'cells' });
+  else if (mode === 'heap' && items.length) body = h('div', { class: 'stack' }, renderHeapArray(items, `${v.name} as heap`, heap), renderArray({ name: v.name, items, total, prevItems: prev?.items, vars, mode: 'cells', heap }));
+  else body = renderArray({ name: v.name, items, total, prevItems: prev?.items, vars, mode: mode === 'bars' ? 'bars' : 'cells', heap });
   return card(v.name, `${n.kind} · len ${total}`, body, tools);
 }

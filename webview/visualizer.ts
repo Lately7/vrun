@@ -262,7 +262,11 @@ export class Visualizer {
     const body = h('div', { class: 'frames' });
     [...step.stack].reverse().forEach((f, i) => {
       const table = h('table', { class: 'kv' });
-      for (const [name, val] of f.locals) table.appendChild(h('tr', {}, h('th', {}, name), h('td', {}, fmtScalar(val, step.heap))));
+      for (const [name, val] of f.locals) {
+        // Class and function definitions are not state: keep the stack about data.
+        if (typeof val === 'object' && val !== null && '$t' in val && (val.$t === 'cls' || val.$t === 'fn')) continue;
+        table.appendChild(h('tr', {}, h('th', {}, name), h('td', {}, fmtScalar(val, step.heap))));
+      }
       body.appendChild(h('div', { class: `frame ${i === 0 ? 'top' : ''}` }, h('div', { class: 'frame-name' }, `${f.func}  (line ${f.line + this.lineOffset})`), table));
     });
     sec.appendChild(body);

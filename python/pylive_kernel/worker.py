@@ -10,12 +10,16 @@ Threads:
 from __future__ import annotations
 
 import _thread
+import ast
+import builtins
 import codecs
 import collections
+import copy
 import hashlib
 import io
 import json
 import os
+import pathlib
 import queue
 import secrets
 import signal
@@ -23,9 +27,11 @@ import sys
 import threading
 import time
 import weakref
+from dataclasses import dataclass
 from typing import Any, BinaryIO, Callable
 
 from . import dataframe, executor, inspector, safety, tracer
+from .programinput import NO_INPUT_HINT, ProgramInput
 from .serialize import type_name
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -39,6 +45,8 @@ TASK_TYPES = {
     "execute", "trace", "analyze", "variables.list", "variables.inspect",
     "dataframe.metadata", "dataframe.page", "dataframe.summary", "dataframe.column",
 }
+_NO_VALUE = object()
+_UNCACHEABLE = object()
 
 
 class RequestError(Exception):
@@ -234,18 +242,37 @@ class _BinaryWriter:
         raise io.UnsupportedOperation("PyLive capture stream has no file descriptor")
 
 
-class _NoInput:
-    def readline(self, *_: Any) -> str:
-        raise RuntimeError("input() is not supported in PyLive Inspector; set the value in code")
+class _StdinProxy:
+    """sys.stdin of the kernel: reads the current run's program input."""
 
-    read = readline
+    def __init__(self, worker: Worker) -> None:
+        self._worker = worker
+
+    def _stream(self) -> io.StringIO:
+        pi = self._worker.program_input
+        if not pi.provided:
+            raise EOFError(NO_INPUT_HINT)
+        return pi.stream
+
+    def readline(self, *args: Any) -> str:
+        return self._stream().readline(*args)
+
+    def read(self, *args: Any) -> str:
+        return self._stream().read(*args)
+
+    def readlines(self, *args: Any) -> list[str]:
+        return self._stream().readlines(*args)
+
+    def __iter__(self) -> Any:
+        return iter(self._stream())
 
     def isatty(self) -> bool:
         return False
 
+    def fileno(self) -> int:
+        raise io.UnsupportedOperation("PyLive program input has no file descriptor")
 
-def _no_input(prompt: object = "") -> str:
-    raise RuntimeError("input() is not supported in PyLive Inspector; set the value in code")
+    closed = False
 
 
 # --------------------------------------------------------------------------
@@ -259,6 +286,14 @@ class Task:
         self.msg = msg
         self.id = msg["id"]
         self.type = msg["type"]
+
+
+@dataclass(frozen=True)
+class LoadSnapshot:
+    key: str
+    bindings: tuple[tuple[str, object], ...]
+    has_value: bool
+    value: object
 
 
 class Worker:
@@ -283,6 +318,14 @@ class Worker:
         self.ns: dict[str, Any] = self.user.__dict__
         self.page_cache = dataframe.PageCache()
         self.ml_hashes: set[str] = set()
+        self.program_input = ProgramInput(None)
+        # A slot excludes the free-name fingerprint, so changing an input
+        # replaces (and releases) the prior snapshot instead of accumulating
+        # one full dataset per path value.
+        self.load_cache: dict[str, LoadSnapshot] = {}
+        self.current_skipped_loads: list[dict[str, Any]] = []
+        self.current_loaded_now: list[dict[str, Any]] = []
+        self.timeout_generation = 0
         self.shutting_down = False
 
     # -- setup -------------------------------------------------------------
@@ -316,9 +359,10 @@ class Worker:
                 raise
 
         threading.Thread.start = start  # type: ignore[method-assign]
-        sys.stdin = _NoInput()  # type: ignore[assignment]
+        sys.stdin = _StdinProxy(self)  # type: ignore[assignment]
         import builtins
-        builtins.input = _no_input  # type: ignore[assignment]
+        # input() reads the program input (<script>.in sent by the host).
+        builtins.input = lambda prompt="": self.program_input.input(prompt)  # type: ignore[assignment]
         signal.signal(signal.SIGINT, signal.default_int_handler)
         executor.silence_agg_show_warning()
 
@@ -447,6 +491,7 @@ class Worker:
         with self.cur_lock:
             self.current = task
             self.interrupt_reason = None
+            self.timeout_generation += 1
         timer: threading.Timer | None = None
         budget = self._deadline_for(task)
         if budget is not None:
@@ -483,6 +528,7 @@ class Worker:
         if timer is not None:
             timer.cancel()
         with self.cur_lock:
+            self.timeout_generation += 1
             self.current = None
 
     def _interrupted_reply(self, task: Task) -> dict[str, Any]:
@@ -495,14 +541,18 @@ class Worker:
                 "status": "error", "executionCount": self.execution_count,
                 "error": {"ename": "KeyboardInterrupt", "evalue": msg, "traceback": f"KeyboardInterrupt: {msg}\n",
                           "frames": [], "userFrame": None}, "figures": [],
+                "skippedLoads": list(self.current_skipped_loads),
+                "loadedNow": list(self.current_loaded_now),
+                "loadCache": len(self.load_cache),
                 "interrupted": code}}
         return reply
 
     def _deadline_for(self, task: Task) -> float | None:
         p = task.msg
         if task.type == "execute":
-            if p.get("mode") == "live":
-                return _num(p.get("timeoutMs"), 5000, 100, 600_000) / 1000
+            # Live execute arms the budget only around non-load statements.
+            # A first-time load remains manually interruptible but has no
+            # automatic deadline.
             return None
         if task.type == "trace":
             return _num(p.get("timeoutMs"), 15000, 100, 600_000) / 1000
@@ -517,6 +567,31 @@ class Worker:
                 s.flush()
             except KeyboardInterrupt:
                 pass
+
+    def _arm_live_timeout(self, seconds: float) -> threading.Timer:
+        with self.cur_lock:
+            self.timeout_generation += 1
+            generation = self.timeout_generation
+            target = self.current.id if self.current is not None else None
+
+        def fire() -> None:
+            with self.cur_lock:
+                current = self.current
+                if generation != self.timeout_generation or current is None \
+                        or current.id != target or self.interrupt_reason is not None:
+                    return
+                self.interrupt_reason = "timeout"
+                _thread.interrupt_main()
+
+        timer = threading.Timer(seconds, fire)
+        timer.daemon = True
+        timer.start()
+        return timer
+
+    def _disarm_live_timeout(self, timer: threading.Timer) -> None:
+        with self.cur_lock:
+            self.timeout_generation += 1
+        timer.cancel()
 
     # -- dispatch ----------------------------------------------------------
     def dispatch(self, task: Task) -> Any:
@@ -551,34 +626,115 @@ class Worker:
             raise RequestError("bad_request", "mode must be 'manual' or 'live'")
         self.current_exec_id = p.get("execId")
         self.exec_seq += 1
+        stdin = self._stdin_param(p)
+        self.program_input = ProgramInput(stdin)
         self.output_bytes = 0
         self.output_truncated = False
+        self.current_skipped_loads = []
+        self.current_loaded_now = []
+
+        live_budget = None
+        if mode == "live":
+            live_budget = _num(p.get("timeoutMs"), 5000, 100, 600_000) / 1000
 
         analysis = safety.analyze_source(code)
-        if mode == "live" and not analysis["safe"]:
-            return {"status": "blocked", "analysis": analysis, "executionCount": self.execution_count}
+        statement_analysis = analysis.get("statements", [])
+        live_ok = analysis["liveSafe"] or (stdin is not None and analysis.get("liveSafeWithInput"))
+        if mode == "live" and not live_ok:
+            return {"status": "blocked", "analysis": analysis,
+                    "executionCount": self.execution_count,
+                    "skippedLoads": [], "loadedNow": [],
+                    "loadCache": len(self.load_cache)}
         code_hash = hashlib.sha256(code.encode("utf-8", "surrogatepass")).hexdigest()
         if mode == "manual" and analysis.get("training") and code_hash in self.ml_hashes \
                 and not p.get("force"):
             return {"status": "needs_confirmation", "analysis": analysis,
-                    "executionCount": self.execution_count}
+                    "executionCount": self.execution_count,
+                    "skippedLoads": [], "loadedNow": [],
+                    "loadCache": len(self.load_cache)}
 
         executor.register_source(filename, code, line_offset)
         try:
-            _, (exec_code, eval_code) = executor.compile_cell(code, filename, line_offset)
+            statements = executor.compile_statements(code, filename, line_offset)
         except SyntaxError as exc:
             return {"status": "error", "error": executor.format_syntax_error(exc),
-                    "executionCount": self.execution_count, "figures": []}
+                    "executionCount": self.execution_count, "figures": [],
+                    "skippedLoads": [], "loadedNow": [],
+                    "loadCache": len(self.load_cache)}
+
+        if len(statement_analysis) != len(statements):
+            raise RuntimeError("safety and compiler statement counts differ")
 
         self.execution_count += 1
         self.page_cache.clear()
         started = time.perf_counter()
         value: Any = None
         error = None
+        remaining = live_budget
         try:
-            exec(exec_code, self.ns)
-            if eval_code is not None:
-                value = eval(eval_code, self.ns)
+            for statement, statement_info in zip(statements, statement_analysis):
+                is_load = bool(statement_info["load"])  # type: ignore[index]
+                bound_names = _bound_names(statement.node) if is_load else set()
+                load_summary = {"line": statement.line, "code": statement.source[:80]}
+                load_slot = None
+                load_key = None
+                if is_load:
+                    load_slot, load_key = _load_identity(filename, statement.node, self.ns)
+
+                can_skip = bool(bound_names) or statement.is_expression
+                if mode == "live" and can_skip \
+                        and load_slot is not None and load_key is not None:
+                    snapshot = self.load_cache.get(load_slot)
+                    if snapshot is not None and snapshot.key == load_key:
+                        restored, restored_value = _restore_load_snapshot(snapshot, self.ns)
+                        if restored:
+                            if statement.is_expression:
+                                value = restored_value
+                            self.current_skipped_loads.append(load_summary)
+                            continue
+                        self.load_cache.pop(load_slot, None)
+
+                if load_slot is not None:
+                    # A failed refresh must not leave an older successful key
+                    # eligible for skipping, and a new fingerprint replaces
+                    # the prior dataset for this statement slot.
+                    self.load_cache.pop(load_slot, None)
+
+                timer = None
+                statement_started = time.perf_counter()
+                if mode == "live" and not is_load:
+                    assert remaining is not None
+                    if remaining <= 0:
+                        with self.cur_lock:
+                            if self.interrupt_reason is None:
+                                self.interrupt_reason = "timeout"
+                        raise KeyboardInterrupt
+                    timer = self._arm_live_timeout(remaining)
+                try:
+                    if statement.is_expression:
+                        value = eval(statement.code, self.ns)
+                    else:
+                        exec(statement.code, self.ns)
+                except BaseException:
+                    if load_slot is not None:
+                        self.load_cache.pop(load_slot, None)
+                    raise
+                else:
+                    if load_slot is not None and load_key is not None:
+                        self.current_loaded_now.append(load_summary)
+                        snapshot = _capture_load_snapshot(
+                            load_key, bound_names, self.ns,
+                            statement.is_expression, value,
+                        )
+                        if snapshot is not None:
+                            self.load_cache[load_slot] = snapshot
+                        # A no-binding, non-final expression may have visible
+                        # side effects, so it deliberately remains uncached.
+                finally:
+                    if timer is not None:
+                        self._disarm_live_timeout(timer)
+                        assert remaining is not None
+                        remaining -= time.perf_counter() - statement_started
         except KeyboardInterrupt:
             raise
         except SystemExit as exc:
@@ -594,6 +750,9 @@ class Worker:
             "elapsedMs": round(elapsed * 1000, 2),
             "figures": executor.capture_figures(),
             "outputTruncated": self.output_truncated,
+            "skippedLoads": list(self.current_skipped_loads),
+            "loadedNow": list(self.current_loaded_now),
+            "loadCache": len(self.load_cache),
         }
         if error:
             result["error"] = error
@@ -610,18 +769,28 @@ class Worker:
         code = _str(p.get("code"), "code", 200_000)
         self.current_exec_id = p.get("execId")
         self.exec_seq += 1
+        stdin = self._stdin_param(p)
         if p.get("mode") == "live":
             analysis = safety.analyze_source(code)
-            if not analysis["safe"]:
+            # A trace starts from a fresh namespace, so loads would re-read on
+            # every keystroke: only program input is allowed in live traces.
+            only_input = all(f["category"] == "input" for f in analysis["findings"])  # type: ignore[union-attr, index]
+            if not analysis["safe"] and not (stdin is not None and only_input):
                 return {"status": "blocked", "analysis": analysis}
         result = tracer.run_trace(
             code,
             max_steps=int(_num(p.get("maxSteps"), 1000, 10, 20000)),
             max_bytes=int(_num(p.get("maxBytes"), 6_000_000, 10_000, 7_000_000)),
             max_seconds=_num(p.get("timeoutMs"), 15000, 100, 600_000) / 1000,
+            stdin=stdin,
         )
         result["status"] = "ok"
         return result
+
+    @staticmethod
+    def _stdin_param(p: dict[str, Any]) -> str | None:
+        stdin = p.get("stdin")
+        return None if stdin is None else _str(stdin, "stdin", 1_100_000)
 
     def h_analyze(self, p: dict[str, Any]) -> dict[str, Any]:
         return safety.analyze_source(_str(p.get("code"), "code", 2_000_000))
@@ -682,6 +851,179 @@ class Worker:
 
     def respond_error(self, req_id: Any, code: str, message: str) -> None:
         self.writer.send(_error(req_id, code, message))
+
+
+def _target_names(target: ast.expr) -> set[str]:
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names: set[str] = set()
+        for item in target.elts:
+            names.update(_target_names(item))
+        return names
+    return set()
+
+
+def _bound_names(statement: ast.stmt) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(statement):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                names.update(_target_names(target))
+        elif isinstance(node, ast.AnnAssign):
+            names.update(_target_names(node.target))
+    return names
+
+
+def _is_exact_immutable(value: object) -> bool:
+    if value is None or type(value) in (str, bytes, int, float, bool):
+        return True
+    return type(value) is tuple and all(_is_exact_immutable(item) for item in value)
+
+
+def _copy_for_load_cache(value: object) -> object:
+    """Return an isolated copy, or _UNCACHEABLE for unsupported objects."""
+    if _is_exact_immutable(value):
+        return value
+
+    pandas_module = sys.modules.get("pandas")
+    if pandas_module is not None:
+        pandas_types = tuple(
+            candidate for candidate in (
+                getattr(pandas_module, "DataFrame", None),
+                getattr(pandas_module, "Series", None),
+                getattr(pandas_module, "Index", None),
+            )
+            if isinstance(candidate, type)
+        )
+        if pandas_types and isinstance(value, pandas_types):
+            try:
+                copy_on_write = bool(pandas_module.options.mode.copy_on_write)
+            except Exception:  # noqa: BLE001 - older pandas has no COW option
+                copy_on_write = False
+            try:
+                return value.copy(deep=not copy_on_write)
+            except Exception:  # noqa: BLE001 - caching must not break execution
+                return _UNCACHEABLE
+
+    numpy_module = sys.modules.get("numpy")
+    if numpy_module is not None:
+        ndarray = getattr(numpy_module, "ndarray", None)
+        if isinstance(ndarray, type) and isinstance(value, ndarray):
+            try:
+                return value.copy()
+            except Exception:  # noqa: BLE001
+                return _UNCACHEABLE
+
+    if type(value) in (dict, list, set):
+        try:
+            return copy.deepcopy(value)
+        except Exception:  # noqa: BLE001
+            return _UNCACHEABLE
+    return _UNCACHEABLE
+
+
+def _capture_load_snapshot(
+    key: str,
+    bound_names: set[str],
+    namespace: dict[str, Any],
+    is_expression: bool,
+    value: object,
+) -> LoadSnapshot | None:
+    bindings: list[tuple[str, object]] = []
+    if bound_names:
+        for name in sorted(bound_names):
+            if name not in namespace:
+                return None
+            copied = _copy_for_load_cache(namespace[name])
+            if copied is _UNCACHEABLE:
+                return None
+            bindings.append((name, copied))
+        return LoadSnapshot(key, tuple(bindings), False, _NO_VALUE)
+    if is_expression:
+        copied = _copy_for_load_cache(value)
+        if copied is not _UNCACHEABLE:
+            return LoadSnapshot(key, (), True, copied)
+    return None
+
+
+def _restore_load_snapshot(
+    snapshot: LoadSnapshot, namespace: dict[str, Any]
+) -> tuple[bool, object]:
+    bindings: list[tuple[str, object]] = []
+    for name, cached in snapshot.bindings:
+        copied = _copy_for_load_cache(cached)
+        if copied is _UNCACHEABLE:
+            return False, _NO_VALUE
+        bindings.append((name, copied))
+
+    restored_value: object = _NO_VALUE
+    if snapshot.has_value:
+        restored_value = _copy_for_load_cache(snapshot.value)
+        if restored_value is _UNCACHEABLE:
+            return False, _NO_VALUE
+
+    # Do not partially rebind the namespace if copying one value failed.
+    for name, copied in bindings:
+        namespace[name] = copied
+    return True, restored_value
+
+
+def _hash_part(hasher: Any, value: bytes) -> None:
+    hasher.update(len(value).to_bytes(8, "big"))
+    hasher.update(value)
+
+
+def _fingerprint_value(value: object) -> tuple[bytes, bytes]:
+    value_type = type(value)
+    if value is None:
+        return b"none", b""
+    if value_type is str:
+        return b"str", value.encode("utf-8", "surrogatepass")  # type: ignore[union-attr]
+    if value_type is bytes:
+        return b"bytes", value  # type: ignore[return-value]
+    if value_type is bool:
+        return b"bool", b"1" if value else b"0"
+    if value_type is int:
+        return b"int", int.__str__(value).encode("ascii")  # type: ignore[arg-type]
+    if value_type is float:
+        return b"float", float.hex(value).encode("ascii")  # type: ignore[arg-type]
+    if isinstance(value, pathlib.PurePath):
+        path_value = os.fspath(value)
+        if type(path_value) is bytes:
+            return b"path-bytes", path_value
+        return b"path-str", path_value.encode("utf-8", "surrogatepass")
+    return b"object", f"{type_name(value)}:{id(value)}".encode("utf-8")
+
+
+def _load_identity(
+    filename: str, statement: ast.stmt, namespace: dict[str, Any]
+) -> tuple[str, str]:
+    bound = _bound_names(statement)
+    free_names = sorted({
+        node.id for node in ast.walk(statement)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        and node.id not in bound and node.id not in vars(builtins)
+    })
+    filename_bytes = filename.encode("utf-8", "surrogatepass")
+    statement_bytes = ast.dump(statement, include_attributes=False).encode("utf-8")
+    slot_hasher = hashlib.sha256()
+    _hash_part(slot_hasher, filename_bytes)
+    _hash_part(slot_hasher, statement_bytes)
+    key_hasher = hashlib.sha256()
+    _hash_part(key_hasher, filename_bytes)
+    _hash_part(key_hasher, statement_bytes)
+    missing = object()
+    for name in free_names:
+        _hash_part(key_hasher, name.encode("utf-8"))
+        value = namespace.get(name, missing)
+        if value is missing:
+            tag, encoded = b"missing", b""
+        else:
+            tag, encoded = _fingerprint_value(value)
+        _hash_part(key_hasher, tag)
+        _hash_part(key_hasher, encoded)
+    return slot_hasher.hexdigest(), key_hasher.hexdigest()
 
 
 def _error(req_id: Any, code: str, message: str) -> dict[str, Any]:

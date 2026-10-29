@@ -24,6 +24,7 @@ from typing import Any
 
 from .executor import format_exception, format_syntax_error, register_source
 from .heap import HeapEncoder
+from .programinput import ProgramInput, StdinSwap
 
 TRACE_FILE = "<pylive-trace>"
 TRACE_MODULE = "__pylive_trace__"
@@ -171,7 +172,8 @@ class Recorder:
 
 
 def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
-              max_seconds: float = 10.0, max_nodes: int = 150, max_items: int = 64) -> dict[str, Any]:
+              max_seconds: float = 10.0, max_nodes: int = 150, max_items: int = 64,
+              stdin: str | None = None) -> dict[str, Any]:
     register_source(TRACE_FILE, code, 0)
     try:
         code_obj = compile(code, TRACE_FILE, "exec")
@@ -180,12 +182,18 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
 
     module = types.ModuleType(TRACE_MODULE)
     ns = module.__dict__
-    ns["__builtins__"] = builtins
     # Classes defined by the traced code get __module__ == "__main__" via
     # __name__, so HeapEncoder recognises them as user types. sys.modules is
     # deliberately left alone: kernel threads must keep seeing the real
     # persistent __main__ while a trace runs.
     ns["__name__"] = "__main__"
+    # input() reads the program input (<script>.in) instead of the real stdin,
+    # which in the kernel is not a terminal (and in-process would block).
+    # A private builtins mapping keeps input() out of the traced variables.
+    program_input = ProgramInput(stdin)
+    trace_builtins = dict(vars(builtins))
+    trace_builtins["input"] = program_input.input
+    ns["__builtins__"] = trace_builtins
     out = _BoundedOutput(200_000)
     rec = Recorder(max_steps, max_bytes, max_seconds, max_nodes, max_items, out)
     error = None
@@ -196,6 +204,8 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
     sys.stdout = _ThreadRouter(old_out, out, tid)  # type: ignore[assignment]
     sys.stderr = _ThreadRouter(old_err, out, tid)  # type: ignore[assignment]
     started = time.perf_counter()
+    swap = StdinSwap(program_input)
+    swap.__enter__()
     sys.settrace(rec.global_trace)
     try:
         exec(code_obj, ns)
@@ -209,6 +219,7 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
     finally:
         sys.settrace(None)
         sys.stdout, sys.stderr = old_out, old_err
+        swap.__exit__()
     elapsed = time.perf_counter() - started
     return {
         "steps": rec.steps,

@@ -36,7 +36,8 @@
       { "command": "pylive.openDataFrame", "title": "Open DataFrame Viewer", "category": "PyLive" },
       { "command": "pylive.interrupt", "title": "Interrupt Execution", "category": "PyLive", "icon": "$(debug-pause)" },
       { "command": "pylive.showLog", "title": "Show Kernel Log", "category": "PyLive" },
-      { "command": "pylive.clearInlineResults", "title": "Clear Inline Results", "category": "PyLive" }
+      { "command": "pylive.clearInlineResults", "title": "Clear Inline Results", "category": "PyLive" },
+      { "command": "pylive.editInput", "title": "Edit Program Input (stdin)", "category": "PyLive" }
     ],
     "keybindings": [
       { "command": "pylive.runSelection", "key": "ctrl+alt+enter", "mac": "cmd+alt+enter", "when": "editorTextFocus && editorLangId == python" },

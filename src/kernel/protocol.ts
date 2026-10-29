@@ -63,6 +63,10 @@ export interface ExecuteResult {
   analysis?: Analysis;
   interrupted?: 'interrupted' | 'timeout';
   outputTruncated?: boolean;
+  /** Data-loading statements reused from an earlier run ("load once"). */
+  skippedLoads?: Array<{ line: number; code: string }>;
+  /** Data-loading statements that actually ran in this execution. */
+  loadedNow?: Array<{ line: number; code: string }>;
 }
 
 export interface HeapNode {

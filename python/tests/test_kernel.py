@@ -60,9 +60,26 @@ def test_system_exit_does_not_kill_kernel(kernel):
     assert kernel.run("1 + 1")["value"]["repr"] == "2"
 
 
-def test_input_is_rejected(kernel):
+def test_input_without_program_input_explains_the_in_file(kernel):
     r = kernel.run("input('name?')")
-    assert r["status"] == "error" and "not supported" in r["error"]["evalue"]
+    assert r["status"] == "error" and r["error"]["ename"] == "EOFError"
+    assert ".in" in r["error"]["evalue"]
+
+
+def test_program_input_feeds_input_and_stdin(kernel):
+    code = "n = int(input())\nimport sys\nrest = sys.stdin.readline().split()\nn + len(rest)"
+    r = kernel.run(code, stdin="2\na b c\n")
+    assert r["value"]["repr"] == "5"
+    # Live Mode may re-run input() when program input is supplied...
+    assert kernel.run(code, stdin="2\na b c\n", mode="live")["value"]["repr"] == "5"
+    # ...but not without it.
+    assert kernel.run(code, mode="live")["status"] == "blocked"
+
+
+def test_trace_uses_program_input(kernel):
+    r = kernel.call("trace", code="a = list(map(int, input().split()))\ns = sum(a)", stdin="1 2 3\n", mode="live")
+    loc = dict(r["result"]["steps"][-1]["stack"][0]["locals"])
+    assert loc["s"] == 6
 
 
 def test_interrupt_long_running_python_loop(kernel):

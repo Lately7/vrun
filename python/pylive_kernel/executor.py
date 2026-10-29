@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import __future__
 import io
 import linecache
 import os
@@ -11,6 +12,7 @@ import sys
 import traceback
 import types
 import warnings
+from dataclasses import dataclass
 from typing import Any
 
 from .serialize import safe_repr, short_type_name, type_module, type_name, type_qualname
@@ -21,6 +23,15 @@ MAX_FIGURE_BYTES = 2 * 1024 * 1024
 MAX_FIGURE_PIXELS = 4096
 # Leaves headroom under the worker's 8 MiB message limit for the rest of the result.
 MAX_FIGURES_TOTAL_B64 = 5 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class CompiledStatement:
+    node: ast.stmt
+    code: Any
+    is_expression: bool
+    line: int
+    source: str
 
 
 def make_user_module() -> types.ModuleType:
@@ -56,6 +67,53 @@ def compile_cell(code: str, filename: str, line_offset: int) -> tuple[Any, Any]:
     exec_code = compile(tree, filename, "exec")
     eval_code = compile(last_expr, filename, "eval") if last_expr is not None else None
     return tree, (exec_code, eval_code)
+
+
+def compile_statements(code: str, filename: str, line_offset: int) -> list[CompiledStatement]:
+    """Compile top-level statements separately without changing source locations."""
+    try:
+        tree = ast.parse(code, filename, "exec")
+    except SyntaxError as exc:
+        if line_offset and exc.lineno:
+            exc.lineno += line_offset
+            if getattr(exc, "end_lineno", None):
+                exc.end_lineno += line_offset  # type: ignore[operator]
+        raise
+
+    sources = [ast.get_source_segment(code, statement) or "" for statement in tree.body]
+    original_lines = [statement.lineno for statement in tree.body]
+    if line_offset:
+        ast.increment_lineno(tree, line_offset)
+
+    # Compiling once validates constraints that are cell-wide, such as the
+    # placement of future imports, before any statement can mutate state.
+    whole = compile(tree, filename, "exec")
+    future_mask = 0
+    for feature_name in __future__.all_feature_names:
+        future_mask |= getattr(__future__, feature_name).compiler_flag
+    flags = whole.co_flags & future_mask
+
+    result: list[CompiledStatement] = []
+    last_index = len(tree.body) - 1
+    for index, statement in enumerate(tree.body):
+        is_expression = index == last_index and isinstance(statement, ast.Expr)
+        unit: ast.AST
+        mode: str
+        if is_expression:
+            unit = ast.Expression(statement.value)
+            mode = "eval"
+        else:
+            unit = ast.Module(body=[statement], type_ignores=[])
+            mode = "exec"
+        compiled = compile(unit, filename, mode, flags=flags, dont_inherit=True)
+        result.append(CompiledStatement(
+            node=statement,
+            code=compiled,
+            is_expression=is_expression,
+            line=original_lines[index] + line_offset,
+            source=sources[index],
+        ))
+    return result
 
 
 def format_syntax_error(exc: SyntaxError) -> dict[str, Any]:

@@ -23,6 +23,7 @@ export function activate(context: vscode.ExtensionContext): PyLiveController {
   reg('pylive.interrupt', () => c.interrupt());
   reg('pylive.showLog', () => c.showLog());
   reg('pylive.clearInlineResults', () => c.clearInlineResults());
+  reg('pylive.editInput', () => c.editProgramInput());
   context.subscriptions.push(c);
   // Returned as the extension API so integration tests can observe state.
   return c;

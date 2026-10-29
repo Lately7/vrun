@@ -1,6 +1,6 @@
 /** Arrays: bars (numeric) or cells, with index pointers and change highlights. */
 import { s, svgRoot } from '../dom';
-import { Encoded, numeric } from '../format';
+import { Encoded, Heap, numeric } from '../format';
 import { POINTER_COLORS, Var, allNumeric, pointersFor, sameEncoded, shortScalar } from './common';
 
 export interface ArrayViewOpts {
@@ -10,6 +10,8 @@ export interface ArrayViewOpts {
   prevItems?: Encoded[];
   vars: Var[];
   mode: 'bars' | 'cells';
+  /** Needed to label cells that hold small tuples, e.g. (dist, node). */
+  heap?: Heap;
 }
 
 const CELL_W = 38;
@@ -57,7 +59,7 @@ export function renderArray(o: ArrayViewOpts): SVGSVGElement {
       svg.appendChild(s('rect', { x: x + 2, y, width: cellW - 4, height: hgt, rx: 2, class: `bar ${cls}` }, s('title', {}, `${o.name}[${i}] = ${shortScalar(it)}`)));
     }
     svg.appendChild(s('rect', { x, y: cellTop, width: cellW, height: cellH, class: `cellbox ${cls}` }));
-    const label = shortScalar(it);
+    const label = shortScalar(it, o.heap);
     svg.appendChild(
       s('text', { x: x + cellW / 2, y: cellTop + cellH / 2 + 4, 'text-anchor': 'middle', class: `cell-text ${label.length * 6.5 > cellW ? 'small' : ''}` }, label),
     );

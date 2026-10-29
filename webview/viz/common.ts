@@ -3,7 +3,7 @@ import { Encoded, Heap, HeapNode, isRef, numeric } from '../format';
 
 /** Locals that look like index pointers into arrays. */
 const POINTER_NAME =
-  /^(i|j|k|l|r|lo|hi|low|high|mid|m|left|right|start|end|begin|p|q|idx|index|pos|ptr|slow|fast|cur|curr|top|front|rear|head|tail|pivot|pi|min_idx|max_idx|min_index|max_index|best|row|col|r|c|x|y)$|(_idx|_index|_i|_ptr)$/i;
+  /^(i|j|k|l|r|lo|hi|low|high|mid|m|left|right|start|end|begin|p|q|idx|index|pos|ptr|slow|fast|cur|curr|top|front|rear|head|tail|pivot|pi|min_idx|max_idx|min_index|max_index|best|row|col|r|c|x|y|nr|nc|dr|dc|ni|nj|nx|ny|dx|dy)$|(_idx|_index|_i|_ptr)$/i;
 
 export interface Var {
   name: string;
@@ -79,7 +79,13 @@ export function shortScalar(v: Encoded, heap?: Heap): string {
   if (typeof v === 'boolean') return v ? 'T' : 'F';
   if (isRef(v)) {
     const n = heap?.[String(v.ref)];
-    return n ? (n.kind === 'object' ? n.type ?? 'obj' : `${n.kind}`) : '…';
+    if (!n) return '…';
+    // Small tuples are values to a learner, e.g. (dist, node) in a priority
+    // queue or (row, col) in a BFS queue: show their contents.
+    if (n.kind === 'tuple' && n.items && n.items.length <= 3 && n.items.every((x) => !isRef(x))) {
+      return '(' + n.items.map((x) => shortScalar(x)).join(',') + ')';
+    }
+    return n.kind === 'object' ? n.type ?? 'obj' : `${n.kind}`;
   }
   if (v.$t === 'inf') return '∞';
   if (v.$t === '-inf') return '-∞';

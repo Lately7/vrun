@@ -1,7 +1,8 @@
 /**
- * Execution output as a quiet, continuous log (newest at the bottom, like a
- * terminal): one muted meta line per run, then its output. Errors get a thin
- * red rule instead of a coloured card.
+ * Execution output: only the latest run is shown (each run replaces the
+ * previous one), as a muted meta line plus its output. Errors get a thin red
+ * rule instead of a coloured card. Background-thread output has its own
+ * small block.
  */
 import { button, clear, h } from './dom';
 
@@ -15,6 +16,8 @@ interface ExecResult {
   analysis?: { findings: Array<{ line: number; category: string; message: string }> };
   interrupted?: string;
   outputTruncated?: boolean;
+  skippedLoads?: Array<{ line: number; code: string }>;
+  loadedNow?: Array<{ line: number; code: string }>;
 }
 
 interface Block {
@@ -77,6 +80,18 @@ export class OutputView {
   start(execId: number, label: string, mode: string, file = '', docKey = file): void {
     const bottom = this.atBottom();
     this.empty.hidden = true;
+    // One result on screen: a new run replaces the previous one (late output
+    // of the replaced run is dropped like a superseded live run).
+    if (execId !== BACKGROUND_ID) {
+      for (const [id, b] of this.blocks) {
+        if (id === BACKGROUND_ID) continue;
+        b.el.remove();
+        this.blocks.delete(id);
+        this.forget(id);
+      }
+      this.errorCount = 0;
+      this.onError(0);
+    }
     const meta = h('div', { class: 'run-meta' }, h('span', { class: 'dot-busy', 'aria-hidden': 'true' }), [file, label].filter(Boolean).join('  ·  '));
     const stdout = h('pre', { class: 'console' });
     const body = h('div', {});
@@ -88,14 +103,6 @@ export class OutputView {
       oldest?.remove();
       // Drop the map entry too, or evicted blocks (and their output) leak.
       for (const [id, b] of this.blocks) if (b.el === oldest) this.blocks.delete(id);
-    }
-    // Old live runs are noise: keep only the latest finished live block of
-    // the same file (other files' blocks and runs still in flight stay).
-    if (mode === 'live') {
-      for (const [id, b] of this.blocks) if (id !== execId && b.done && b.docKey === docKey && b.el.classList.contains('live') && !b.el.classList.contains('error')) {
-        b.el.remove();
-        this.blocks.delete(id);
-      }
     }
     this.follow(bottom);
   }
@@ -128,6 +135,12 @@ export class OutputView {
     this.follow(bottom);
   }
 
+  /** Drop any late output still tagged with a run that is no longer shown. */
+  private forget(execId: number): void {
+    this.superseded.add(execId);
+    if (this.superseded.size > 500) this.superseded.delete(this.superseded.values().next().value!);
+  }
+
   private backgroundBlock(): Block {
     let b = this.blocks.get(BACKGROUND_ID);
     if (!b) {
@@ -147,8 +160,7 @@ export class OutputView {
       // dropped, and so is any late output still tagged with its id.
       b.el.remove();
       this.blocks.delete(execId);
-      this.superseded.add(execId);
-      if (this.superseded.size > 500) this.superseded.delete(this.superseded.values().next().value!);
+      this.forget(execId);
       return;
     }
     const bottom = this.atBottom();
@@ -202,6 +214,12 @@ export class OutputView {
     }
     const ml = result.analysis?.findings.filter((x) => x.category === 'training' || x.category === 'expensive');
     if (ml?.length) b.body.appendChild(h('p', { class: 'muted small' }, 'Model training: never re-run by Live Mode.'));
+    // "Load once": say quietly which data was reused instead of re-read.
+    const reused = result.skippedLoads ?? [];
+    if (reused.length) {
+      const lines = reused.map((s) => s.line).join(', ');
+      b.body.appendChild(h('p', { class: 'muted small', title: reused.map((s) => s.code).join('\n') }, `data from line ${lines} reused (loaded once)`));
+    }
     this.follow(bottom);
   }
 }

@@ -108,7 +108,7 @@ def test_safety_flags_ml_and_io():
         "GridSearchCV(est, grid)": "expensive",
         "cross_val_score(m, X, y)": "expensive",
         "torch_model.train()": "training",
-        "pd.read_excel('a.xlsx')": "io",
+        "pd.read_excel('a.xlsx')": "load",  # loaded once by Live Mode, see test_load_once.py
         "df.to_csv('out.csv')": "io",
         "open('f')": "io",
         "import requests\nrequests.get('http://x')": "io",

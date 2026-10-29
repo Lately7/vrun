@@ -123,6 +123,28 @@ function tests(): void {
     await doc.save();
   });
 
+  test('Live Mode on a pandas file reads the data once, then reuses it', async () => {
+    const csv = path.join(ws, 'sales.csv').replace(/\\/g, '/');
+    fs.writeFileSync(csv, 'v\n1\n2\n3\n');
+    const file = path.join(ws, 'pandas_live.py');
+    fs.writeFileSync(file, `import pandas as pd\ndf = pd.read_csv("${csv}")\ntotal = df["v"].sum()\n`);
+    const doc = await vscode.workspace.openTextDocument(file);
+    const editor = await vscode.window.showTextDocument(doc);
+    // Turning Live on runs once right away (and starts the kernel if needed).
+    await vscode.commands.executeCommand('pylive.toggleLiveMode');
+    const totalIs = (expected: string) => async () => {
+      const r = await c.kernel.request<ExecuteResult>('execute', { code: "globals().get('total')" });
+      return r.value?.repr === expected;
+    };
+    await waitFor(totalIs('np.int64(6)'), 15000, 'first live run');
+    // If Live re-read the file now, it would fail: the file is gone.
+    fs.unlinkSync(csv);
+    await editor.edit((e) => e.replace(doc.lineAt(2).range, 'total = df["v"].sum() * 10'));
+    await waitFor(totalIs('np.int64(60)'), 15000, 'live re-run without re-reading');
+    await vscode.commands.executeCommand('pylive.toggleLiveMode');
+    await doc.save();
+  });
+
   test('inline results are quiet and disappear when their line is edited', async () => {
     const file = path.join(ws, 'inline_demo.py');
     fs.writeFileSync(file, 'x = 1\nprint(x)\nx + 1\n');

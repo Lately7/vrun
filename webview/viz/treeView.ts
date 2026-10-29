@@ -161,7 +161,7 @@ export function renderLinkedList(headRef: number, heap: Heap, vars: Var[], title
 }
 
 /** Binary heap drawn as a tree from its array (index i -> children 2i+1, 2i+2). */
-export function renderHeapArray(items: Encoded[], title: string): SVGSVGElement {
+export function renderHeapArray(items: Encoded[], title: string, heap?: Heap): SVGSVGElement {
   const n = Math.min(items.length, 63);
   const depth = Math.floor(Math.log2(Math.max(1, n))) + 1;
   const width = Math.max(200, Math.pow(2, depth - 1) * 46 + 20);
@@ -181,7 +181,8 @@ export function renderHeapArray(items: Encoded[], title: string): SVGSVGElement 
   for (let i = 0; i < n; i++) {
     const [x, y] = posOf(i);
     svg.appendChild(s('circle', { cx: x, cy: y, r: NR, class: i === 0 ? 'tnode pointed' : 'tnode' }));
-    svg.appendChild(s('text', { x, y: y + 4, 'text-anchor': 'middle', class: 'gnode-text' }, shortScalar(items[i])));
+    const label = shortScalar(items[i], heap);
+    svg.appendChild(s('text', { x, y: y + 4, 'text-anchor': 'middle', class: `gnode-text ${label.length > 3 ? 'tiny' : ''}` }, label));
     svg.appendChild(s('text', { x, y: y + NR + 11, 'text-anchor': 'middle', class: 'index-text' }, String(i)));
   }
   return svg;

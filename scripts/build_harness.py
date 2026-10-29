@@ -57,7 +57,9 @@ def main() -> None:
         summary = k.call("dataframe.summary", name="df")["result"]
     finally:
         k.close()
-    traces = {name: tracer.run_trace(code) for name, code in cells(os.path.join(ROOT, "examples", "dsa_demo.py")).items()}
+    # Optional argument: another examples file with "# %% " cells.
+    source = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "examples", "dsa_demo.py")
+    traces = {name: tracer.run_trace(code) for name, code in cells(source).items()}
     data = {"ready": variables, "meta": meta, "page": page, "summary": summary, "traces": traces,
             "session": variables["session"]}
     os.makedirs(os.path.join(ROOT, "dev"), exist_ok=True)

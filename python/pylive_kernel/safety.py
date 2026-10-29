@@ -20,9 +20,9 @@ EXPENSIVE_CALLS = {
     "cross_val_predict", "learning_curve", "validation_curve",
     "permutation_importance", "train_test_split_and_fit",
 }
-IO_METHOD_PREFIXES = ("read_", "to_")
+IO_METHOD_PREFIXES = ("to_",)
 IO_METHODS = {"savefig", "save", "save_model", "load_model", "download", "urlopen"}
-IO_FUNCTIONS = {"open", "input", "breakpoint", "exec", "eval", "compile", "__import__"}
+IO_FUNCTIONS = {"open", "breakpoint", "exec", "eval", "compile", "__import__"}
 SIDE_EFFECT_MODULES = {
     "requests", "urllib", "httpx", "socket", "subprocess", "shutil", "pickle",
     "joblib", "webbrowser", "smtplib", "ftplib", "sqlite3", "multiprocessing",
@@ -43,8 +43,19 @@ PURE_TO_METHODS = {
 @dataclass
 class Finding:
     line: int
-    category: str  # "training" | "expensive" | "io" | "loop" | "import" | "marker"
+    category: str  # "load" | "input" | "training" | "expensive" | "io" | "loop" | "import" | "marker"
     message: str
+
+
+@dataclass
+class StatementAnalysis:
+    line: int
+    end_line: int
+    findings: list[Finding]
+
+    @property
+    def is_load(self) -> bool:
+        return bool(self.findings) and all(f.category == "load" for f in self.findings)
 
 
 def _call_name(func: ast.expr) -> tuple[str | None, str | None]:
@@ -101,19 +112,29 @@ class _Visitor(ast.NodeVisitor):
                 self._add(node, "training", f"'.{name}()' trains or updates a model")
             elif name in EXPENSIVE_CALLS:
                 self._add(node, "expensive", f"'{name}()' runs repeated model fitting")
+            elif (name == "input" and base is None) or (base == "stdin" and name in ("read", "readline", "readlines")):
+                # Reads the program input (<script>.in): repeatable and cheap,
+                # so Live Mode may re-run it when that input is provided.
+                self._add(node, "input", f"'{name}()' reads program input")
             elif name in IO_FUNCTIONS and base is None:
                 self._add(node, "io", f"'{name}()' performs I/O or dynamic execution")
-            elif base is not None and (
-                name in IO_METHODS
-                or (name.startswith(IO_METHOD_PREFIXES) and name not in PURE_TO_METHODS)
-            ):
-                self._add(node, "io", f"'.{name}()' reads or writes external data")
+            elif name == "read_clipboard":
+                self._add(node, "io", "'read_clipboard()' reads from the system clipboard")
+            elif base in ("np", "numpy") and name in ("load", "loadtxt", "genfromtxt", "fromfile"):
+                self._add(node, "load", f"'{base}.{name}()' loads external data")
             elif base in SIDE_EFFECT_MODULES or base in self.imported_side_effect:
                 self._add(node, "io", f"'{base}.{name}()' has external side effects")
             elif base is None and name in self.imported_side_effect:
                 self._add(node, "io", f"'{name}()' has external side effects")
             elif base == "os" and name in OS_SIDE_EFFECTS:
                 self._add(node, "io", f"'os.{name}()' changes the system")
+            elif name.startswith("read_"):
+                self._add(node, "load", f"'{name}()' loads external data")
+            elif base is not None and (
+                name in IO_METHODS
+                or (name.startswith(IO_METHOD_PREFIXES) and name not in PURE_TO_METHODS)
+            ):
+                self._add(node, "io", f"'.{name}()' reads or writes external data")
             elif base == "time" and name == "sleep":
                 self._add(node, "expensive", "'time.sleep()' blocks execution")
         self.generic_visit(node)
@@ -125,6 +146,21 @@ def analyze_tree(tree: ast.AST) -> list[Finding]:
     return v.findings
 
 
+def analyze_statements(tree: ast.Module) -> list[StatementAnalysis]:
+    """Analyze each top-level statement while retaining import-alias context."""
+    visitor = _Visitor()
+    result: list[StatementAnalysis] = []
+    for statement in tree.body:
+        start = len(visitor.findings)
+        visitor.visit(statement)
+        result.append(StatementAnalysis(
+            line=statement.lineno,
+            end_line=getattr(statement, "end_lineno", statement.lineno) or statement.lineno,
+            findings=visitor.findings[start:],
+        ))
+    return result
+
+
 def analyze_source(code: str) -> dict[str, object]:
     findings: list[Finding] = []
     for i, line in enumerate(code.splitlines(), start=1):
@@ -133,11 +169,24 @@ def analyze_source(code: str) -> dict[str, object]:
     try:
         tree = ast.parse(code)
     except SyntaxError as exc:
-        return {"safe": False, "syntaxError": True, "findings": [
+        return {"safe": False, "liveSafe": False, "syntaxError": True, "findings": [
             asdict(Finding(exc.lineno or 0, "syntax", exc.msg))]}
-    findings.extend(analyze_tree(tree))
+    statements = analyze_statements(tree)
+    findings.extend(f for statement in statements for f in statement.findings)
     return {
         "safe": not findings,
+        "liveSafe": all(f.category == "load" for f in findings),
+        # Safe for Live Mode only when program input is supplied.
+        "liveSafeWithInput": all(f.category in ("load", "input") for f in findings),
         "training": any(f.category in ("training", "expensive") for f in findings),
         "findings": [asdict(f) for f in findings[:50]],
+        "statements": [
+            {
+                "line": statement.line,
+                "endLine": statement.end_line,
+                "load": statement.is_load,
+                "findings": [asdict(f) for f in statement.findings],
+            }
+            for statement in statements
+        ],
     }
