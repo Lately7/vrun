@@ -84,6 +84,10 @@ export class EditorDecorations implements vscode.Disposable {
     this.diagnostics.set(doc.uri, [d]);
   }
 
+  hasErrors(doc: vscode.TextDocument): boolean {
+    return (this.diagnostics.get(doc.uri)?.length ?? 0) > 0;
+  }
+
   clearErrors(doc: vscode.TextDocument): void {
     this.diagnostics.delete(doc.uri);
   }

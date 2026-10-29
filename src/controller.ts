@@ -30,6 +30,18 @@ interface TraceContext {
 const cfg = () => vscode.workspace.getConfiguration('pylive');
 
 /**
+ * One-line form of a result for the editor. A DataFrame/Series repr squeezed
+ * onto one line is unreadable, so tables show their shape (the full table is
+ * in the Output tab); other values show their repr.
+ */
+export function inlineText(value: NonNullable<ExecuteResult['value']>): string {
+  if (value.shape && value.dataframe !== undefined) {
+    return value.dataframe ? `DataFrame ${value.shape.join(' × ')}` : `Series (${value.shape[0]} values)`;
+  }
+  return value.repr;
+}
+
+/**
  * Exactly the selected text (selecting `a()` in `a(); b()` must not run b),
  * except that a start inside the leading indentation snaps to column 0 so
  * multi-line selections keep consistent indentation for dedent().
@@ -58,6 +70,8 @@ export class PyLiveController implements vscode.Disposable {
   private readonly traceContexts = new Map<number, TraceContext>();
   private manualRunning = 0;
   private lastPythonEditor: vscode.TextEditor | undefined;
+  /** Most recent trace shown in the visualizer (read by integration tests). */
+  lastTrace: { uri: vscode.Uri; result: TraceResult } | undefined;
   /** Live runs postponed while a manual run was in flight (scheduler key -> doc). */
   private readonly deferredLive = new Map<string, vscode.TextDocument>();
 
@@ -95,7 +109,7 @@ export class PyLiveController implements vscode.Disposable {
       }),
       vscode.workspace.onDidCloseTextDocument((d) => this.disableLive(d.uri.toString())),
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('pylive.features')) this.postFeatures();
+        if (e.affectsConfiguration('pylive.features') || e.affectsConfiguration('pylive.dataframe.pageSize')) this.postFeatures();
         if (e.affectsConfiguration('pylive.inlineResults') && cfg().get<string>('inlineResults') === 'off') this.clearInlineResults();
       }),
     );
@@ -121,6 +135,7 @@ export class PyLiveController implements vscode.Disposable {
     void vscode.commands.executeCommand('setContext', 'pylive.kernelStatus', s);
     this.panel.post({ type: 'status', status: s, workload: this.kernel.workload });
     if (s === 'crashed') {
+      this.turnLiveOff();
       this.panel.post({ type: 'session', session: null });
       void vscode.window
         .showErrorMessage('PyLive kernel stopped unexpectedly. All variables were lost.', 'Restart Kernel', 'Show Log')
@@ -137,6 +152,15 @@ export class PyLiveController implements vscode.Disposable {
    * back to the last Python editor the user worked in (if still open).
    */
   private targetEditor(): vscode.TextEditor | undefined {
+    // The text tab shown in the active editor group is what the user sees as
+    // "the current file". activeTextEditor follows keyboard focus instead and
+    // can lag behind (e.g. when the window itself does not have OS focus).
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    if (tab?.input instanceof vscode.TabInputText) {
+      const uri = tab.input.uri.toString();
+      const shown = vscode.window.visibleTextEditors.find((ed) => ed.document.uri.toString() === uri);
+      if (shown) return shown;
+    }
     const active = vscode.window.activeTextEditor;
     if (active) return active;
     const last = this.lastPythonEditor;
@@ -211,9 +235,23 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   async stopKernel(): Promise<void> {
-    this.cancelLiveWork();
+    this.turnLiveOff();
     await this.kernel.stop();
     this.panel.post({ type: 'session', session: null });
+  }
+
+  /**
+   * Live edits never start a kernel, so after Stop or a crash Live would sit
+   * "on" doing nothing: switch it off visibly instead (turning it on again
+   * starts the kernel).
+   */
+  private turnLiveOff(): void {
+    const wasOn = this.liveDocs.size + this.liveVizDocs.size > 0;
+    this.cancelLiveWork();
+    this.liveDocs.clear();
+    this.liveVizDocs.clear();
+    this.panel.post({ type: 'liveState', live: false, liveViz: false });
+    if (wasOn) void vscode.window.setStatusBarMessage('PyLive: Live turned off (kernel stopped)', 4000);
   }
 
   async interrupt(): Promise<void> {
@@ -358,17 +396,25 @@ export class PyLiveController implements vscode.Disposable {
     this.decorations.clearInline(doc, startLine, line);
     // Attach to the last line that has code, not to trailing blank lines.
     while (line > startLine && line < doc.lineCount && doc.lineAt(line).isEmptyOrWhitespace) line--;
-    if (result.status === 'error' && result.error) {
+    if (result.interrupted) {
+      // Stopping a run is the student's choice (or the live time budget),
+      // not a bug in their code: no red squiggle, just say what happened.
+      this.decorations.clearErrors(doc);
+      if (enabled) this.decorations.setInline(doc, line, result.interrupted === 'timeout' ? 'live run took longer than the time budget — stopped' : 'stopped');
+    } else if (result.status === 'error' && result.error) {
       this.decorations.showError(doc, result.error);
       if (enabled) this.decorations.setInline(doc, line, `${result.error.ename}: ${result.error.evalue}`);
     } else if (result.status === 'blocked') {
       // A syntax error while typing is expected mid-edit: say nothing.
-      if (result.analysis?.syntaxError) return;
+      if (result.analysis?.syntaxError) {
+        this.decorations.clearErrors(doc);
+        return;
+      }
       const f = result.analysis?.findings[0];
       if (enabled) this.decorations.setInline(doc, line, `not re-run live — ${f ? f.message : 'see Output'}`);
     } else {
       this.decorations.clearErrors(doc);
-      if (enabled && result.value) this.decorations.setInline(doc, line, result.value.repr);
+      if (enabled && result.value) this.decorations.setInline(doc, line, inlineText(result.value));
     }
   }
 
@@ -407,13 +453,16 @@ export class PyLiveController implements vscode.Disposable {
     try {
       await this.ensureKernel();
     } catch {
+      // The kernel could not start: Live must not stay "on" doing nothing.
+      this.liveDocs.delete(key);
+      this.panel.post({ type: 'liveState', live: false, liveViz: this.liveVizDocs.has(key) });
       return;
     }
     if (this.liveDocs.has(key)) this.scheduler.schedule(sk, (gen) => this.runLive(doc, sk, gen));
   }
 
-  toggleLiveVisualize(): void {
-    if (!this.featureEnabled('visualizer')) return;
+  async toggleLiveVisualize(): Promise<void> {
+    if (!(await this.featureEnabled('visualizer'))) return;
     const doc = this.targetEditor()?.document;
     if (!doc || doc.languageId !== 'python') {
       void vscode.window.showInformationMessage('PyLive: open a Python file to use Live Visualize.');
@@ -425,6 +474,14 @@ export class PyLiveController implements vscode.Disposable {
       void vscode.window.setStatusBarMessage('PyLive: Live Visualize OFF', 2500);
     } else {
       this.liveVizDocs.add(key);
+      try {
+        await this.ensureKernel();
+      } catch {
+        // No kernel: Live Visualize must not stay "on" doing nothing.
+        this.liveVizDocs.delete(key);
+        this.panel.post({ type: 'liveState', live: this.liveDocs.has(key), liveViz: false });
+        return;
+      }
       void this.visualize();
       void vscode.window.setStatusBarMessage('PyLive: Live Visualize ON — the visualizer follows your edits', 3500);
     }
@@ -445,14 +502,18 @@ export class PyLiveController implements vscode.Disposable {
    * The visualizer and DataFrame viewer are opt-in (Settings → PyLive) so
    * the default panel stays minimal. Asks once to enable when used while off.
    */
-  private featureEnabled(feature: Feature): boolean {
+  private async featureEnabled(feature: Feature): Promise<boolean> {
     if (cfg().get<boolean>(`features.${feature}`, false)) return true;
     const label = feature === 'visualizer' ? 'The algorithm visualizer (DSA)' : 'The DataFrame viewer';
-    void vscode.window.showInformationMessage(`PyLive: ${label} is turned off.`, 'Turn On', 'Open Settings').then((pick) => {
-      if (pick === 'Turn On') void cfg().update(`features.${feature}`, true, vscode.ConfigurationTarget.Global);
-      if (pick === 'Open Settings') void vscode.commands.executeCommand('workbench.action.openSettings', `pylive.features.${feature}`);
-    });
-    return false;
+    const pick = await vscode.window.showInformationMessage(`PyLive: ${label} is turned off.`, 'Turn On', 'Open Settings');
+    if (pick === 'Open Settings') void vscode.commands.executeCommand('workbench.action.openSettings', `pylive.features.${feature}`);
+    if (pick !== 'Turn On') return false;
+    // Enable it and carry on with what the student asked for. Tell the
+    // webview first: the configuration event may arrive after our next
+    // message (e.g. "open this DataFrame"), which it would otherwise ignore.
+    await cfg().update(`features.${feature}`, true, vscode.ConfigurationTarget.Global);
+    this.postFeatures();
+    return true;
   }
 
   private postFeatures(): void {
@@ -460,6 +521,7 @@ export class PyLiveController implements vscode.Disposable {
       type: 'features',
       visualizer: cfg().get<boolean>('features.visualizer', false),
       dataframe: cfg().get<boolean>('features.dataframe', false),
+      pageSize: cfg().get<number>('dataframe.pageSize', 50),
     });
   }
 
@@ -497,6 +559,8 @@ export class PyLiveController implements vscode.Disposable {
     const key = doc.uri.toString();
     // Inline notes are keyed by line number: an edit invalidates the notes of
     // the lines it touches, and adding/removing lines shifts every later note.
+    // An error squiggle belongs to the code that ran; once edited it is stale.
+    if (this.decorations.hasErrors(doc)) this.decorations.clearErrors(doc);
     for (const ch of e.contentChanges) {
       const removed = ch.range.end.line - ch.range.start.line;
       const added = (ch.text.match(/\n/g) ?? []).length;
@@ -594,7 +658,7 @@ export class PyLiveController implements vscode.Disposable {
   // ------------------------------------------------------------ visualizer
 
   async visualize(): Promise<void> {
-    if (!this.featureEnabled('visualizer')) return;
+    if (!(await this.featureEnabled('visualizer'))) return;
     const doc = this.targetEditor()?.document;
     if (!doc) return;
     this.panel.reveal('visualizer', true);
@@ -644,6 +708,7 @@ export class PyLiveController implements vscode.Disposable {
       // Keyed by execId: the webview may still be showing an older trace
       // (it ignores results older than the newest one it started).
       this.traceContexts.set(execId, { uri: doc.uri, lineOffset: scope.lineOffset });
+      this.lastTrace = { uri: doc.uri, result };
       for (const id of this.traceContexts.keys()) if (this.traceContexts.size > 20) this.traceContexts.delete(id);
       this.panel.post({ type: 'trace', execId, label: scope.label, mode, lineOffset: scope.lineOffset, result });
       if (result.error?.userFrame && result.error.userFrame.line > 0) {
@@ -688,7 +753,7 @@ export class PyLiveController implements vscode.Disposable {
   }
 
   async openDataFrame(name?: string): Promise<void> {
-    if (!this.featureEnabled('dataframe')) return;
+    if (!(await this.featureEnabled('dataframe'))) return;
     if (!name) {
       if (!this.kernel.isRunning) {
         void vscode.window.showInformationMessage('PyLive: start the kernel and create a DataFrame first.');

@@ -15,6 +15,7 @@ export const WEBVIEW_COMMANDS = [
   'visualize',
   'toggleLiveVisualize',
   'showLog',
+  'editInput',
 ] as const;
 export type WebviewCommand = (typeof WEBVIEW_COMMANDS)[number];
 
@@ -30,6 +31,7 @@ export const WEBVIEW_COMMAND_IDS: Record<WebviewCommand, string> = {
   visualize: 'pylive.visualize',
   toggleLiveVisualize: 'pylive.toggleLiveVisualize',
   showLog: 'pylive.showLog',
+  editInput: 'pylive.editInput',
 };
 
 export const FILTER_OPS = ['eq', 'ne', 'lt', 'le', 'gt', 'ge', 'contains', 'isnull', 'notnull'] as const;

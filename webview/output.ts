@@ -4,6 +4,7 @@
  * rule instead of a coloured card. Background-thread output has its own
  * small block.
  */
+import { send } from './api';
 import { button, clear, h } from './dom';
 
 interface ExecResult {
@@ -27,6 +28,7 @@ interface Block {
   body: HTMLElement;
   docKey: string;
   done: boolean;
+  ticker?: ReturnType<typeof setInterval>;
 }
 
 const MAX_BLOCKS = 60;
@@ -57,6 +59,7 @@ export class OutputView {
   }
 
   clear(): void {
+    for (const b of this.blocks.values()) this.stopTicker(b);
     clear(this.list);
     this.blocks.clear();
     this.errorCount = 0;
@@ -85,6 +88,7 @@ export class OutputView {
     if (execId !== BACKGROUND_ID) {
       for (const [id, b] of this.blocks) {
         if (id === BACKGROUND_ID) continue;
+        this.stopTicker(b);
         b.el.remove();
         this.blocks.delete(id);
         this.forget(id);
@@ -97,7 +101,20 @@ export class OutputView {
     const body = h('div', {});
     const el = h('div', { class: `run ${mode}` }, meta, stdout, body);
     this.list.append(el);
-    this.blocks.set(execId, { el, stdout, meta, body, docKey, done: false });
+    const block: Block = { el, stdout, meta, body, docKey, done: false };
+    this.blocks.set(execId, block);
+    if (execId !== BACKGROUND_ID) {
+      // Long runs (a first Excel read, a slow cell) show elapsed time so it
+      // is clear the code is working, not stuck.
+      const started = Date.now();
+      const elapsed = h('span', { class: 'meta-note' });
+      block.ticker = setInterval(() => {
+        const s = Math.round((Date.now() - started) / 1000);
+        if (s < 2) return;
+        if (!elapsed.isConnected) meta.append(elapsed);
+        elapsed.textContent = `running ${s} s`;
+      }, 1000);
+    }
     while (this.list.childElementCount > MAX_BLOCKS) {
       const oldest = this.list.firstElementChild;
       oldest?.remove();
@@ -135,6 +152,12 @@ export class OutputView {
     this.follow(bottom);
   }
 
+  private stopTicker(b: Block): void {
+    if (b.ticker !== undefined) clearInterval(b.ticker);
+    b.ticker = undefined;
+    b.meta.querySelector('.meta-note')?.remove();
+  }
+
   /** Drop any late output still tagged with a run that is no longer shown. */
   private forget(execId: number): void {
     this.superseded.add(execId);
@@ -155,6 +178,7 @@ export class OutputView {
     const b = this.blocks.get(execId);
     if (!b) return;
     b.done = true;
+    this.stopTicker(b);
     if (superseded) {
       // A newer live run replaced this one; its result is intentionally
       // dropped, and so is any late output still tagged with its id.
@@ -186,7 +210,7 @@ export class OutputView {
       return;
     }
     b.meta.prepend(h('span', { class: 'count' }, `[${result.executionCount}]`));
-    note(result.interrupted ? 'interrupted' : formatMs(result.elapsedMs));
+    note(formatMs(result.elapsedMs));
     if (result.value) {
       const v = result.value;
       const shape = v.shape ? `${v.shortType} ${v.shape.join(' × ')}` : '';
@@ -205,20 +229,29 @@ export class OutputView {
       else if (f.error) b.body.appendChild(h('p', { class: 'muted small' }, f.error));
     }
     if (result.outputTruncated) b.body.appendChild(h('p', { class: 'muted small' }, 'Output was truncated (2 MB per run).'));
-    if (result.error) {
+    if (result.interrupted) {
+      b.body.appendChild(h('p', { class: 'muted small' }, result.interrupted === 'timeout'
+        ? 'Stopped: this live run took longer than the live time budget (pylive.live.timeoutMs). Use Run Cell for slow code.'
+        : 'Stopped by you. Variables keep the values they had at that moment.'));
+    } else if (result.error) {
       b.el.classList.add('error');
       this.errorCount++;
       this.onError(this.errorCount);
       const details = h('details', { class: 'traceback' }, h('summary', {}, `${result.error.ename}: ${result.error.evalue}`), h('pre', {}, result.error.traceback));
       b.body.appendChild(details);
+      // input() without a .in file: offer to create it right here.
+      if (result.error.ename === 'EOFError' && result.error.evalue.includes('.in')) {
+        b.body.appendChild(button('Create the .in input file', () => send({ type: 'command', command: 'editInput' }), { cls: 'link-btn' }));
+      }
     }
     const ml = result.analysis?.findings.filter((x) => x.category === 'training' || x.category === 'expensive');
     if (ml?.length) b.body.appendChild(h('p', { class: 'muted small' }, 'Model training: never re-run by Live Mode.'));
     // "Load once": say quietly which data was reused instead of re-read.
     const reused = result.skippedLoads ?? [];
     if (reused.length) {
-      const lines = reused.map((s) => s.line).join(', ');
-      b.body.appendChild(h('p', { class: 'muted small', title: reused.map((s) => s.code).join('\n') }, `data from line ${lines} reused (loaded once)`));
+      for (const s of reused) {
+        b.body.appendChild(h('p', { class: 'muted small reuse' }, `Reused data, not re-read: line ${s.line}  `, h('code', {}, s.code)));
+      }
     }
     this.follow(bottom);
   }

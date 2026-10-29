@@ -231,6 +231,10 @@ export class Visualizer {
     if (t.stopped) this.el.appendChild(h('p', { class: 'warn-text' }, `Trace stopped early: ${t.stopped}. Steps before that are shown.`));
     if (t.skippedSteps) this.el.appendChild(h('p', { class: 'muted small' }, `${t.skippedSteps} step(s) close to the recursion limit could not be drawn.`));
     if (t.error) this.el.appendChild(h('pre', { class: 'error-text' }, `${t.error.ename}: ${t.error.evalue}${t.error.userFrame ? ` (line ${t.error.userFrame.line + this.lineOffset})` : ''}`));
+    // input() without a .in file: offer to create it right where the error is.
+    if (t.error?.ename === 'EOFError' && t.error.evalue.includes('.in')) {
+      this.el.appendChild(button('Create the .in input file', () => send({ type: 'command', command: 'editInput' }), { cls: 'link-btn' }));
+    }
     if (!step) return;
 
     const layout = h('div', { class: 'viz-layout' });

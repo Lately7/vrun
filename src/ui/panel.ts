@@ -44,10 +44,15 @@ export class InspectorPanel implements vscode.Disposable {
             return;
           }
           if (msg.type === 'ready') {
-            this.ready = true;
+            // Let the controller send the initial state (features, status,
+            // session) first, then the queued actions that depend on it, such
+            // as "open this DataFrame" for a tab that was just enabled.
             const pending = this.queue;
             this.queue = [];
+            this.ready = true;
+            this.onMessage(msg);
             for (const m of pending) void this.panel?.webview.postMessage(m);
+            return;
           }
           this.onMessage(msg);
         },
@@ -103,7 +108,7 @@ export class InspectorPanel implements vscode.Disposable {
 <title>PyLive Inspector</title>
 </head>
 <body>
-<div id="app" aria-live="polite"></div>
+<div id="app"></div>
 <script nonce="${nonce}" src="${script}"></script>
 </body>
 </html>`;

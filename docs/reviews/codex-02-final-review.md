@@ -136,3 +136,23 @@ of Claude's changes found 5 defects (no `sys.stdin.buffer`, misleading stop
 reason after a user `sys.settrace(None)`, all `.in` read errors treated as
 "missing", temp-dir leaks and space-containing temp dirs in `runTest.ts`) —
 all fixed with tests.
+
+## Round 7 — learner UX review of extension and webview (read-only)
+
+13 findings. Fixed: Live/Live Visualize could stay "on" without a kernel;
+"Turn On" for a disabled feature dropped the requested action (now
+prompt-then-continue, and the feature state reaches a cold webview before the
+queued action); interrupts looked like program errors (now neutral "Stopped
+by you" / time-budget notes, no squiggle); stale error squiggles after edits;
+no elapsed time for long runs, "Stop" renamed "Interrupt"; reuse note now
+visible; "Create the .in input file" button on input() errors; page size
+setting ignored; app-wide aria-live; sticky code overlapping a wrapped
+header.
+Disagreements accepted by Codex in its verification pass: #3 (the user asked
+for the DSA/DataFrame tabs to stay hidden until enabled — kept hidden, a
+DataFrame row now offers enabling) and #8 (blocked traces only exist in live
+mode; manual Visualize cannot show the "live skipped" text). Deferred: #11
+keyboard navigation of DataFrame cells (TASKS.md).
+Found while testing: commands targeted a stale `activeTextEditor` when the
+window lacked OS focus; they now prefer the text tab shown in the active
+editor group (4/4 stable integration runs).

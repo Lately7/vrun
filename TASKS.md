@@ -56,4 +56,4 @@ Full debate log with every verdict: `docs/reviews/codex-02-final-review.md`.
 * ⏳ Optional trace execution in a disposable subprocess for hard limits.
 * ⏳ Dependency-aware re-execution (explicitly out of MVP scope; see ADR log).
 * ⏳ Virtualized rendering for very wide DataFrames (currently 50-column windows).
-* ⏳ `input()` support through a webview prompt.
+* ⏳ Keyboard navigation of DataFrame cells (arrow keys, Enter to select, copy) — currently mouse-only.

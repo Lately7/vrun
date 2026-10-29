@@ -113,7 +113,7 @@ function renderHeader(): void {
     button('Run cell', cmd('runCell'), { cls: 'hbtn', title: 'Run the cell at the cursor (Ctrl+Alt+C)' }),
     button('Run file', cmd('runFile'), { cls: 'hbtn', title: 'Run the whole file' }),
     // Only offered while something runs.
-    ...(busy ? [button('Stop', cmd('interrupt'), { cls: 'hbtn warn', title: 'Interrupt (Ctrl+Alt+I)' })] : []),
+    ...(busy ? [button('Interrupt', cmd('interrupt'), { cls: 'hbtn warn', title: 'Interrupt the running code (Ctrl+Alt+I). Variables are kept.' })] : []),
     button(live ? 'Live on' : 'Live off', cmd('toggleLive'), {
       cls: `hbtn ${live ? 'on' : ''}`,
       pressed: live,
@@ -138,6 +138,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
     case 'features':
       features.dataframe = !!msg.dataframe;
       features.visualizer = !!msg.visualizer;
+      if (typeof msg.pageSize === 'number') dataframe.setPageSize(msg.pageSize);
       showTab(tab);
       variables.refresh();
       break;

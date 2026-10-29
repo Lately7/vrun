@@ -192,7 +192,9 @@ img.figure { max-width: 100%; background: white; border-radius: 3px; margin: 4px
 .step-label { font-variant-numeric: tabular-nums; min-width: 110px; }
 .viz-layout { display: grid; grid-template-columns: minmax(220px, 38%) 1fr; gap: 10px; align-items: start; }
 @media (max-width: 760px) { .viz-layout { grid-template-columns: 1fr; } }
-.viz-code { position: sticky; top: 48px; }
+/* Sticky only on wide panels: a wrapped header would cover it otherwise. */
+.viz-code { position: static; }
+@media (min-width: 900px) { .viz-code { position: sticky; top: 64px; } }
 ol.code {
   font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size, 12px);
   margin: 4px 0; padding-left: 3.2em; max-height: 70vh; overflow: auto;
@@ -268,3 +270,6 @@ table.matrix { border-collapse: collapse; font-family: var(--vscode-editor-font-
 .matrix td.cross { box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--accent) 10%, transparent); }
 .matrix td.cur { outline: 2px solid var(--p1); outline-offset: -2px; font-weight: 700; }
 .matrix td.changed { color: var(--changed); font-weight: 700; }
+
+/* "Reused data, not re-read: line 2  df = pd.read_csv(...)" */
+.reuse code { font-family: var(--vscode-editor-font-family); opacity: 0.85; }

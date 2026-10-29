@@ -19,6 +19,27 @@ async function waitFor<T>(fn: () => T | undefined | Promise<T | undefined>, time
   throw new Error(`timed out waiting for ${what}`);
 }
 
+/**
+ * Show a document and wait until VS Code reports it as the active editor:
+ * showTextDocument can resolve before activeTextEditor is updated, and our
+ * commands act on the active editor.
+ */
+async function showAndActivate(doc: vscode.TextDocument, column?: vscode.ViewColumn): Promise<vscode.TextEditor> {
+  const editor = await vscode.window.showTextDocument(doc, column);
+  // The extension targets the text tab shown in the active group (see
+  // targetEditor); activeTextEditor may lag when the test window lacks focus.
+  const isActiveTab = () => {
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+    return input instanceof vscode.TabInputText && input.uri.toString() === doc.uri.toString();
+  };
+  await waitFor(() => isActiveTab(), 5000, `${path.basename(doc.fileName)} to become active`).catch((e) => {
+    const active = vscode.window.activeTextEditor?.document.fileName;
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    throw new Error(`${(e as Error).message}; active editor=${active ? path.basename(active) : 'none'}; active tab=${tab?.label} (${tab?.input?.constructor.name}); visible=${vscode.window.visibleTextEditors.map((ed) => `${path.basename(ed.document.fileName)}@${ed.viewColumn}`).join(',')}`);
+  });
+  return editor;
+}
+
 /** Put keyboard focus in the inspector webview (it opens beside the editor). */
 async function focusPanel(): Promise<void> {
   await vscode.commands.executeCommand('pylive.openVariables');
@@ -58,7 +79,7 @@ function tests(): void {
 
   test('Run File executes in a persistent kernel (command → kernel → result)', async () => {
     const doc = await vscode.workspace.openTextDocument(path.join(ws, 'pandas_demo.py'));
-    await vscode.window.showTextDocument(doc);
+    await showAndActivate(doc);
     let t = Date.now();
     await vscode.commands.executeCommand('pylive.startKernel');
     console.log(`      kernel start: ${Date.now() - t} ms`);
@@ -78,7 +99,7 @@ function tests(): void {
 
   test('Run Cell runs only the cell under the cursor', async () => {
     const doc = await vscode.workspace.openTextDocument(path.join(ws, 'dsa_demo.py'));
-    const editor = await vscode.window.showTextDocument(doc);
+    const editor = await showAndActivate(doc);
     const line = doc.getText().split('\n').findIndex((l) => l.startsWith('nums = '));
     editor.selection = new vscode.Selection(line, 0, line, 0);
     await vscode.commands.executeCommand('pylive.runCell');
@@ -99,7 +120,7 @@ function tests(): void {
     const file = path.join(ws, 'live_demo.py');
     fs.writeFileSync(file, 'live_value = 1\n');
     const doc = await vscode.workspace.openTextDocument(file);
-    const editor = await vscode.window.showTextDocument(doc);
+    const editor = await showAndActivate(doc);
     // The user clicks the Live button in the inspector, so the webview tab is
     // active. (VS Code still reports the visible Python editor as active;
     // the button -> command mapping itself is covered by a unit test.)
@@ -129,7 +150,7 @@ function tests(): void {
     const file = path.join(ws, 'pandas_live.py');
     fs.writeFileSync(file, `import pandas as pd\ndf = pd.read_csv("${csv}")\ntotal = df["v"].sum()\n`);
     const doc = await vscode.workspace.openTextDocument(file);
-    const editor = await vscode.window.showTextDocument(doc);
+    const editor = await showAndActivate(doc);
     // Turning Live on runs once right away (and starts the kernel if needed).
     await vscode.commands.executeCommand('pylive.toggleLiveMode');
     const totalIs = (expected: string) => async () => {
@@ -145,12 +166,54 @@ function tests(): void {
     await doc.save();
   });
 
+  test('a DataFrame result is shown inline by its shape, not a squeezed table', async () => {
+    const file = path.join(ws, 'df_inline.py');
+    fs.writeFileSync(file, 'import pandas as pd\npd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})\n');
+    const doc = await vscode.workspace.openTextDocument(file);
+    await showAndActivate(doc);
+    await vscode.commands.executeCommand('pylive.runFile');
+    assert.deepEqual([...c.inlineNotes(doc)], [[1, 'DataFrame 3 × 2']]);
+  });
+
+  test('Live Visualize re-traces when the program input (.in) changes', async () => {
+    const file = path.join(ws, 'judge.py');
+    const input = path.join(ws, 'judge.in');
+    fs.writeFileSync(file, 'n = int(input())\nnums = list(map(int, input().split()))\ntotal = sum(nums[:n])\n');
+    fs.writeFileSync(input, '2\n5 7 9\n');
+    const doc = await vscode.workspace.openTextDocument(file);
+    await showAndActivate(doc, vscode.ViewColumn.One);
+    await vscode.commands.executeCommand('pylive.toggleLiveVisualize');
+    const totalInTrace = () => {
+      const t = c.lastTrace;
+      if (!t || t.uri.toString() !== doc.uri.toString() || !t.result.steps.length) return undefined;
+      const locals = new Map(t.result.steps[t.result.steps.length - 1].stack[0].locals);
+      return locals.get('total');
+    };
+    const describeTrace = () => {
+      const t = c.lastTrace;
+      return t
+        ? `last trace: ${path.basename(t.uri.fsPath)} steps=${t.result.steps.length} status=${t.result.status} error=${t.result.error?.ename}:${t.result.error?.evalue} stdout=${JSON.stringify(t.result.stdout)}`
+        : 'no trace';
+    };
+    await waitFor(() => totalInTrace() === 12, 15000, 'trace with the first input').catch((e) => {
+      throw new Error(`${(e as Error).message}; ${describeTrace()}; liveViz=${c.liveState(doc.uri).liveViz}`);
+    });
+    // Editing the .in file (unsaved) re-traces with the new input.
+    const inDoc = await vscode.workspace.openTextDocument(input);
+    const inEditor = await showAndActivate(inDoc, vscode.ViewColumn.One);
+    await inEditor.edit((e) => e.replace(new vscode.Range(0, 0, 0, 1), '3'));
+    await waitFor(() => totalInTrace() === 21, 15000, 'trace with the edited input');
+    await showAndActivate(doc, vscode.ViewColumn.One);
+    await vscode.commands.executeCommand('pylive.toggleLiveVisualize');
+    await inDoc.save();
+  });
+
   test('inline results are quiet and disappear when their line is edited', async () => {
     const file = path.join(ws, 'inline_demo.py');
     fs.writeFileSync(file, 'x = 1\nprint(x)\nx + 1\n');
     const doc = await vscode.workspace.openTextDocument(file);
     // Same group as the inspector on purpose: running must not cover the file.
-    const editor = await vscode.window.showTextDocument(doc);
+    const editor = await showAndActivate(doc);
     await vscode.commands.executeCommand('pylive.runFile');
     assert.ok(vscode.window.visibleTextEditors.some((ed) => ed.document === doc), 'the edited file stays visible');
     // Only the value of the final expression (on its own line), no "✓ [n] ms" noise.

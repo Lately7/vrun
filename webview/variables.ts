@@ -156,7 +156,10 @@ export class VariablesView {
         h('td', { class: 'meta', title: v.type }, this.meta(v)),
         actions,
       );
-      const activate = () => (isFrame ? dataframe && this.openDataFrame(v.name) : expandable && this.toggle(v.name));
+      // With the DataFrame tab turned off, ask the host: it offers to turn
+      // it on and then opens this frame.
+      const activate = () =>
+        isFrame ? (dataframe ? this.openDataFrame(v.name) : send({ type: 'openDataFrame', name: v.name })) : expandable && this.toggle(v.name);
       tr.addEventListener('click', (e) => {
         if (!(e.target as HTMLElement).closest('button')) activate();
       });
