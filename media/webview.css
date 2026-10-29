@@ -1,4 +1,4 @@
-/* PyLive Inspector webview. Colors come from VS Code theme variables so light,
+/* Veil webview. Colors come from VS Code theme variables so light,
    dark and high-contrast themes work without extra rules. */
 :root {
   --gap: 8px;

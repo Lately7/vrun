@@ -1,9 +1,9 @@
 {
-  "name": "pylive-inspector",
-  "displayName": "PyLive Inspector",
+  "name": "veil",
+  "displayName": "Veil",
   "description": "Persistent Python kernel for .py files with a variable explorer, large-DataFrame viewer and real-time data-structure & algorithm visualizer.",
   "version": "0.2.0",
-  "publisher": "pylive-local",
+  "publisher": "veil-local",
   "license": "MIT",
   "private": true,
   "engines": {
@@ -17,61 +17,61 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
-      "description": "PyLive Inspector executes Python code from the workspace."
+      "description": "Veil executes Python code from the workspace."
     },
     "virtualWorkspaces": false
   },
   "contributes": {
     "commands": [
-      { "command": "pylive.startKernel", "title": "Start Kernel", "category": "PyLive" },
-      { "command": "pylive.restartKernel", "title": "Restart Kernel", "category": "PyLive", "icon": "$(debug-restart)" },
-      { "command": "pylive.stopKernel", "title": "Stop Kernel", "category": "PyLive", "icon": "$(debug-stop)" },
-      { "command": "pylive.runSelection", "title": "Run Selection", "category": "PyLive" },
-      { "command": "pylive.runCell", "title": "Run Cell", "category": "PyLive", "icon": "$(play-circle)" },
-      { "command": "pylive.runFile", "title": "Run File", "category": "PyLive", "icon": "$(run-all)" },
-      { "command": "pylive.toggleLiveMode", "title": "Toggle Live Mode", "category": "PyLive" },
-      { "command": "pylive.visualize", "title": "Visualize Algorithm (step-by-step trace)", "category": "PyLive", "icon": "$(graph)" },
-      { "command": "pylive.toggleLiveVisualize", "title": "Toggle Live Visualize (DSA)", "category": "PyLive" },
-      { "command": "pylive.openVariables", "title": "Open Variable Explorer", "category": "PyLive" },
-      { "command": "pylive.openDataFrame", "title": "Open DataFrame Viewer", "category": "PyLive" },
-      { "command": "pylive.interrupt", "title": "Interrupt Execution", "category": "PyLive", "icon": "$(debug-pause)" },
-      { "command": "pylive.showLog", "title": "Show Kernel Log", "category": "PyLive" },
-      { "command": "pylive.clearInlineResults", "title": "Clear Inline Results", "category": "PyLive" },
-      { "command": "pylive.editInput", "title": "Edit Program Input (stdin)", "category": "PyLive" }
+      { "command": "veil.startKernel", "title": "Start Kernel", "category": "Veil" },
+      { "command": "veil.restartKernel", "title": "Restart Kernel", "category": "Veil", "icon": "$(debug-restart)" },
+      { "command": "veil.stopKernel", "title": "Stop Kernel", "category": "Veil", "icon": "$(debug-stop)" },
+      { "command": "veil.runSelection", "title": "Run Selection", "category": "Veil" },
+      { "command": "veil.runCell", "title": "Run Cell", "category": "Veil", "icon": "$(play-circle)" },
+      { "command": "veil.runFile", "title": "Run File", "category": "Veil", "icon": "$(run-all)" },
+      { "command": "veil.toggleLiveMode", "title": "Toggle Live Mode", "category": "Veil" },
+      { "command": "veil.visualize", "title": "Visualize Algorithm (step-by-step trace)", "category": "Veil", "icon": "$(graph)" },
+      { "command": "veil.toggleLiveVisualize", "title": "Toggle Live Visualize (DSA)", "category": "Veil" },
+      { "command": "veil.openVariables", "title": "Open Variable Explorer", "category": "Veil" },
+      { "command": "veil.openDataFrame", "title": "Open DataFrame Viewer", "category": "Veil" },
+      { "command": "veil.interrupt", "title": "Interrupt Execution", "category": "Veil", "icon": "$(debug-pause)" },
+      { "command": "veil.showLog", "title": "Show Kernel Log", "category": "Veil" },
+      { "command": "veil.clearInlineResults", "title": "Clear Inline Results", "category": "Veil" },
+      { "command": "veil.editInput", "title": "Edit Program Input (stdin)", "category": "Veil" }
     ],
     "keybindings": [
-      { "command": "pylive.runSelection", "key": "ctrl+alt+enter", "mac": "cmd+alt+enter", "when": "editorTextFocus && editorLangId == python" },
-      { "command": "pylive.runCell", "key": "ctrl+alt+c", "mac": "cmd+alt+c", "when": "editorTextFocus && editorLangId == python" },
-      { "command": "pylive.visualize", "key": "ctrl+alt+v", "mac": "cmd+alt+v", "when": "editorTextFocus && editorLangId == python" },
-      { "command": "pylive.interrupt", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorLangId == python" }
+      { "command": "veil.runSelection", "key": "ctrl+alt+enter", "mac": "cmd+alt+enter", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "veil.runCell", "key": "ctrl+alt+c", "mac": "cmd+alt+c", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "veil.visualize", "key": "ctrl+alt+v", "mac": "cmd+alt+v", "when": "editorTextFocus && editorLangId == python" },
+      { "command": "veil.interrupt", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorLangId == python" }
     ],
     "menus": {
       "editor/title": [
-        { "command": "pylive.runCell", "when": "editorLangId == python", "group": "navigation@1" },
-        { "command": "pylive.visualize", "when": "editorLangId == python && config.pylive.features.visualizer", "group": "navigation@2" }
+        { "command": "veil.runCell", "when": "editorLangId == python", "group": "navigation@1" },
+        { "command": "veil.visualize", "when": "editorLangId == python && config.veil.features.visualizer", "group": "navigation@2" }
       ],
       "editor/context": [
-        { "command": "pylive.runSelection", "when": "editorLangId == python && editorHasSelection", "group": "pylive@1" },
-        { "command": "pylive.runCell", "when": "editorLangId == python", "group": "pylive@2" },
-        { "command": "pylive.visualize", "when": "editorLangId == python && config.pylive.features.visualizer", "group": "pylive@3" }
+        { "command": "veil.runSelection", "when": "editorLangId == python && editorHasSelection", "group": "pylive@1" },
+        { "command": "veil.runCell", "when": "editorLangId == python", "group": "pylive@2" },
+        { "command": "veil.visualize", "when": "editorLangId == python && config.veil.features.visualizer", "group": "pylive@3" }
       ]
     },
     "configuration": {
-      "title": "PyLive Inspector",
+      "title": "Veil",
       "properties": {
-        "pylive.features.visualizer": {
+        "veil.features.visualizer": {
           "type": "boolean",
           "default": false,
           "order": 0,
           "description": "Show the algorithm visualizer (DSA) tab: step-by-step traces with arrays, number lines, graphs, trees and linked lists."
         },
-        "pylive.features.dataframe": {
+        "veil.features.dataframe": {
           "type": "boolean",
           "default": false,
           "order": 1,
           "description": "Show the DataFrame viewer tab for paging, sorting and filtering pandas DataFrames."
         },
-        "pylive.inlineResults": {
+        "veil.inlineResults": {
           "type": "string",
           "enum": ["values", "off"],
           "enumDescriptions": [
@@ -82,41 +82,41 @@
           "order": 2,
           "description": "Results shown inline in the editor after a run. Notes disappear when you edit their line."
         },
-        "pylive.pythonPath": {
+        "veil.pythonPath": {
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
           "description": "Python interpreter for the kernel. Empty: use the Python extension's selected interpreter, then `python` on PATH."
         },
-        "pylive.live.debounceMs": {
+        "veil.live.debounceMs": {
           "type": "number", "default": 800, "minimum": 150, "maximum": 10000,
           "description": "Delay after the last edit before Live Mode re-runs code."
         },
-        "pylive.live.timeoutMs": {
+        "veil.live.timeoutMs": {
           "type": "number", "default": 5000, "minimum": 200, "maximum": 120000,
           "description": "Time budget for one live run. The kernel is interrupted when it is exceeded."
         },
-        "pylive.interrupt.graceMs": {
+        "veil.interrupt.graceMs": {
           "type": "number", "default": 3000, "minimum": 500, "maximum": 60000,
           "description": "How long to wait for an interrupt before offering to restart the kernel."
         },
-        "pylive.dataframe.pageSize": {
+        "veil.dataframe.pageSize": {
           "type": "number", "default": 50, "minimum": 10, "maximum": 500,
           "description": "Rows per DataFrame page."
         },
-        "pylive.inspect.timeoutMs": {
+        "veil.inspect.timeoutMs": {
           "type": "number", "default": 20000, "minimum": 1000, "maximum": 600000,
           "description": "Time budget for DataFrame summaries and other inspection requests."
         },
-        "pylive.trace.maxSteps": {
+        "veil.trace.maxSteps": {
           "type": "number", "default": 1000, "minimum": 10, "maximum": 20000,
           "description": "Maximum recorded steps for the algorithm visualizer."
         },
-        "pylive.trace.timeoutMs": {
+        "veil.trace.timeoutMs": {
           "type": "number", "default": 15000, "minimum": 500, "maximum": 600000,
           "description": "Time budget for one algorithm trace."
         },
-        "pylive.safeMl.confirmRepeatTraining": {
+        "veil.safeMl.confirmRepeatTraining": {
           "type": "boolean", "default": true,
           "description": "Ask before re-running a cell that trains a model and already ran in this kernel session."
         }

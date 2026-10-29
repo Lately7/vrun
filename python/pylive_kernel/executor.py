@@ -36,7 +36,7 @@ class CompiledStatement:
 
 def make_user_module() -> types.ModuleType:
     """Fresh ``__main__`` module, as IPython does, so pickling/`if __name__` work."""
-    mod = types.ModuleType("__main__", "PyLive Inspector user namespace")
+    mod = types.ModuleType("__main__", "Veil user namespace")
     mod.__dict__["__builtins__"] = __builtins__
     sys.modules["__main__"] = mod
     return mod

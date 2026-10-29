@@ -2,6 +2,13 @@
 
 ## 0.2.0 — 2026-10-29
 
+### Renamed
+* The extension is now **Veil** (extension id `veil-local.veil`, commands
+  `Veil: …`). Settings moved from `pylive.*` to `veil.*` — re-apply any
+  custom values (e.g. `veil.pythonPath`). Uninstall the old
+  `pylive-local.pylive-inspector` extension.
+* New black-and-white sparkle logo.
+
 ### Added
 * Live Mode loads data once and restores it from a snapshot (ADR-007); turning
   Live on starts the kernel and runs immediately.

@@ -147,7 +147,7 @@ export class KernelClient {
       proc.once('exit', (code, signal) => this.onExit(proc, code, signal, () => {
         clearTimeout(timeout);
         sub.dispose();
-        reject(new Error(`Python exited during startup (code ${code}). See "PyLive: Show Kernel Log".`));
+        reject(new Error(`Python exited during startup (code ${code}). See "Veil: Show Kernel Log".`));
       }));
     });
   }

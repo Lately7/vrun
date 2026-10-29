@@ -91,7 +91,7 @@ describe('protocol parsing', () => {
 
 describe('webview buttons', () => {
   it('every button maps to a command contributed in package.json', () => {
-    // Regression: the Live button sent "pylive.toggleLive", which does not exist.
+    // Regression: the Live button sent "veil.toggleLive", which does not exist.
     const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', '..', 'package.json'), 'utf8'));
     const contributed = new Set((pkg.contributes.commands as Array<{ command: string }>).map((c) => c.command));
     for (const name of WEBVIEW_COMMANDS) {

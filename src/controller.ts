@@ -27,7 +27,7 @@ interface TraceContext {
   lineOffset: number;
 }
 
-const cfg = () => vscode.workspace.getConfiguration('pylive');
+const cfg = () => vscode.workspace.getConfiguration('veil');
 
 /**
  * One-line form of a result for the editor. A DataFrame/Series repr squeezed
@@ -52,9 +52,9 @@ function selectionRange(doc: vscode.TextDocument, sel: vscode.Selection): vscode
   return new vscode.Range(sel.start.line, startChar, sel.end.line, sel.end.character);
 }
 
-export class PyLiveController implements vscode.Disposable {
+export class VeilController implements vscode.Disposable {
   readonly kernel = new KernelClient();
-  private readonly output = vscode.window.createOutputChannel('PyLive Inspector');
+  private readonly output = vscode.window.createOutputChannel('Veil');
   private readonly status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   private readonly decorations = new EditorDecorations();
   private readonly panel: InspectorPanel;
@@ -91,7 +91,7 @@ export class PyLiveController implements vscode.Disposable {
     this.kernel.onInterruptStuck.on(() => void this.offerRestartAfterStuckInterrupt());
     const active = vscode.window.activeTextEditor;
     if (active?.document.languageId === 'python') this.lastPythonEditor = active;
-    this.status.command = 'pylive.openVariables';
+    this.status.command = 'veil.openVariables';
     this.onKernelStatus('stopped');
     this.status.show();
 
@@ -109,8 +109,8 @@ export class PyLiveController implements vscode.Disposable {
       }),
       vscode.workspace.onDidCloseTextDocument((d) => this.disableLive(d.uri.toString())),
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('pylive.features') || e.affectsConfiguration('pylive.dataframe.pageSize')) this.postFeatures();
-        if (e.affectsConfiguration('pylive.inlineResults') && cfg().get<string>('inlineResults') === 'off') this.clearInlineResults();
+        if (e.affectsConfiguration('veil.features') || e.affectsConfiguration('veil.dataframe.pageSize')) this.postFeatures();
+        if (e.affectsConfiguration('veil.inlineResults') && cfg().get<string>('inlineResults') === 'off') this.clearInlineResults();
       }),
     );
   }
@@ -127,18 +127,18 @@ export class PyLiveController implements vscode.Disposable {
       restarting: '$(sync~spin)',
       crashed: '$(error)',
     };
-    this.status.text = `${icons[s]} PyLive: ${s}`;
+    this.status.text = `${icons[s]} Veil: ${s}`;
     this.status.tooltip = this.kernel.info
       ? `Python ${this.kernel.info.python.version} (pid ${this.kernel.info.pid})\nClick to open the inspector`
-      : 'PyLive Inspector kernel';
+      : 'Veil kernel';
     this.status.backgroundColor = s === 'crashed' ? new vscode.ThemeColor('statusBarItem.errorBackground') : undefined;
-    void vscode.commands.executeCommand('setContext', 'pylive.kernelStatus', s);
+    void vscode.commands.executeCommand('setContext', 'veil.kernelStatus', s);
     this.panel.post({ type: 'status', status: s, workload: this.kernel.workload });
     if (s === 'crashed') {
       this.turnLiveOff();
       this.panel.post({ type: 'session', session: null });
       void vscode.window
-        .showErrorMessage('PyLive kernel stopped unexpectedly. All variables were lost.', 'Restart Kernel', 'Show Log')
+        .showErrorMessage('Veil kernel stopped unexpectedly. All variables were lost.', 'Restart Kernel', 'Show Log')
         .then((pick) => {
           if (pick === 'Restart Kernel') void this.restartKernel();
           if (pick === 'Show Log') this.output.show();
@@ -201,7 +201,7 @@ export class PyLiveController implements vscode.Disposable {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       void vscode.window
-        .showErrorMessage(`PyLive: could not start the Python kernel. ${msg}`, 'Show Log', 'Choose Interpreter')
+        .showErrorMessage(`Veil: could not start the Python kernel. ${msg}`, 'Show Log', 'Choose Interpreter')
         .then((pick) => {
           if (pick === 'Show Log') this.output.show();
           if (pick === 'Choose Interpreter') void vscode.commands.executeCommand('python.setInterpreter');
@@ -221,10 +221,10 @@ export class PyLiveController implements vscode.Disposable {
     try {
       const ready = await this.kernel.restart(await this.launchOptions());
       this.output.appendLine(`[pylive] kernel restarted: pid ${ready.pid}`);
-      void vscode.window.setStatusBarMessage('PyLive: kernel restarted — all previous variables are gone', 4000);
+      void vscode.window.setStatusBarMessage('Veil: kernel restarted — all previous variables are gone', 4000);
       await this.refreshVariables();
     } catch (err) {
-      void vscode.window.showErrorMessage(`PyLive: restart failed. ${err instanceof Error ? err.message : err}`);
+      void vscode.window.showErrorMessage(`Veil: restart failed. ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -251,12 +251,12 @@ export class PyLiveController implements vscode.Disposable {
     this.liveDocs.clear();
     this.liveVizDocs.clear();
     this.panel.post({ type: 'liveState', live: false, liveViz: false });
-    if (wasOn) void vscode.window.setStatusBarMessage('PyLive: Live turned off (kernel stopped)', 4000);
+    if (wasOn) void vscode.window.setStatusBarMessage('Veil: Live turned off (kernel stopped)', 4000);
   }
 
   async interrupt(): Promise<void> {
     if (!this.kernel.isRunning || this.kernel.workload === 0) {
-      void vscode.window.setStatusBarMessage('PyLive: nothing is running', 2000);
+      void vscode.window.setStatusBarMessage('Veil: nothing is running', 2000);
       return;
     }
     await this.kernel.interrupt(undefined, cfg().get<number>('interrupt.graceMs', 3000));
@@ -264,7 +264,7 @@ export class PyLiveController implements vscode.Disposable {
 
   private async offerRestartAfterStuckInterrupt(): Promise<void> {
     const pick = await vscode.window.showWarningMessage(
-      'PyLive: the kernel did not respond to the interrupt (it is probably inside native code, or the code catches KeyboardInterrupt). ' +
+      'Veil: the kernel did not respond to the interrupt (it is probably inside native code, or the code catches KeyboardInterrupt). ' +
         'Restarting kills the process and ALL variables are lost.',
       'Restart Kernel',
       'Keep Waiting',
@@ -380,7 +380,7 @@ export class PyLiveController implements vscode.Disposable {
     const what = result.analysis?.findings.find((f) => f.category === 'training' || f.category === 'expensive');
     const pick = await vscode.window.showWarningMessage(
       `This code trains a model and already ran in this kernel session (${what?.message ?? 'training detected'}). Run it again?`,
-      { modal: true, detail: 'PyLive asks to avoid accidental repeated training. Disable with "pylive.safeMl.confirmRepeatTraining".' },
+      { modal: true, detail: 'Veil asks to avoid accidental repeated training. Disable with "veil.safeMl.confirmRepeatTraining".' },
       'Run Again',
     );
     return pick === 'Run Again';
@@ -432,7 +432,7 @@ export class PyLiveController implements vscode.Disposable {
   async toggleLiveMode(): Promise<void> {
     const doc = this.targetEditor()?.document;
     if (!doc || doc.languageId !== 'python') {
-      void vscode.window.showInformationMessage('PyLive: open a Python file to use Live Mode.');
+      void vscode.window.showInformationMessage('Veil: open a Python file to use Live Mode.');
       return;
     }
     const key = doc.uri.toString();
@@ -440,13 +440,13 @@ export class PyLiveController implements vscode.Disposable {
     if (this.liveDocs.delete(key)) {
       this.scheduler.cancel(sk);
       this.deferredLive.delete(sk);
-      void vscode.window.setStatusBarMessage('PyLive: Live off', 2500);
+      void vscode.window.setStatusBarMessage('Veil: Live off', 2500);
       this.panel.post({ type: 'liveState', live: false, liveViz: this.liveVizDocs.has(key) });
       return;
     }
     this.liveDocs.add(key);
     this.panel.post({ type: 'liveState', live: true, liveViz: this.liveVizDocs.has(key) });
-    void vscode.window.setStatusBarMessage('PyLive: Live on — data is loaded once, the rest re-runs as you type', 4000);
+    void vscode.window.setStatusBarMessage('Veil: Live on — data is loaded once, the rest re-runs as you type', 4000);
     // Turning Live on is an explicit request: start the kernel if needed
     // (live edits never start one on their own) and run once right away,
     // so data files are read now instead of on the first keystroke.
@@ -465,13 +465,13 @@ export class PyLiveController implements vscode.Disposable {
     if (!(await this.featureEnabled('visualizer'))) return;
     const doc = this.targetEditor()?.document;
     if (!doc || doc.languageId !== 'python') {
-      void vscode.window.showInformationMessage('PyLive: open a Python file to use Live Visualize.');
+      void vscode.window.showInformationMessage('Veil: open a Python file to use Live Visualize.');
       return;
     }
     const key = doc.uri.toString();
     if (this.liveVizDocs.delete(key)) {
       this.scheduler.cancel(`trace:${key}`);
-      void vscode.window.setStatusBarMessage('PyLive: Live Visualize OFF', 2500);
+      void vscode.window.setStatusBarMessage('Veil: Live Visualize OFF', 2500);
     } else {
       this.liveVizDocs.add(key);
       try {
@@ -483,7 +483,7 @@ export class PyLiveController implements vscode.Disposable {
         return;
       }
       void this.visualize();
-      void vscode.window.setStatusBarMessage('PyLive: Live Visualize ON — the visualizer follows your edits', 3500);
+      void vscode.window.setStatusBarMessage('Veil: Live Visualize ON — the visualizer follows your edits', 3500);
     }
     this.panel.post({ type: 'liveState', live: this.liveDocs.has(key), liveViz: this.liveVizDocs.has(key) });
   }
@@ -499,14 +499,14 @@ export class PyLiveController implements vscode.Disposable {
   // --------------------------------------------------------------- features
 
   /**
-   * The visualizer and DataFrame viewer are opt-in (Settings → PyLive) so
+   * The visualizer and DataFrame viewer are opt-in (Settings → Veil) so
    * the default panel stays minimal. Asks once to enable when used while off.
    */
   private async featureEnabled(feature: Feature): Promise<boolean> {
     if (cfg().get<boolean>(`features.${feature}`, false)) return true;
     const label = feature === 'visualizer' ? 'The algorithm visualizer (DSA)' : 'The DataFrame viewer';
-    const pick = await vscode.window.showInformationMessage(`PyLive: ${label} is turned off.`, 'Turn On', 'Open Settings');
-    if (pick === 'Open Settings') void vscode.commands.executeCommand('workbench.action.openSettings', `pylive.features.${feature}`);
+    const pick = await vscode.window.showInformationMessage(`Veil: ${label} is turned off.`, 'Turn On', 'Open Settings');
+    if (pick === 'Open Settings') void vscode.commands.executeCommand('workbench.action.openSettings', `veil.features.${feature}`);
     if (pick !== 'Turn On') return false;
     // Enable it and carry on with what the student asked for. Tell the
     // webview first: the configuration event may arrive after our next
@@ -592,7 +592,7 @@ export class PyLiveController implements vscode.Disposable {
         // A missing .in file is normal; anything else (permissions, a folder
         // named solution.in) must not turn into the "create a .in file" hint.
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          void vscode.window.showWarningMessage(`PyLive: could not read program input ${path.basename(inPath)}: ${(err as Error).message}`);
+          void vscode.window.showWarningMessage(`Veil: could not read program input ${path.basename(inPath)}: ${(err as Error).message}`);
         }
         return undefined;
       }
@@ -616,11 +616,11 @@ export class PyLiveController implements vscode.Disposable {
     }
   }
 
-  /** "PyLive: Edit Program Input": open (creating if needed) `<script>.in`. */
+  /** "Veil: Edit Program Input": open (creating if needed) `<script>.in`. */
   async editProgramInput(): Promise<void> {
     const doc = this.targetEditor()?.document;
     if (!doc || doc.languageId !== 'python' || doc.uri.scheme !== 'file') {
-      void vscode.window.showInformationMessage('PyLive: open a saved Python file first.');
+      void vscode.window.showInformationMessage('Veil: open a saved Python file first.');
       return;
     }
     const inPath = inputPathFor(doc.uri.fsPath);
@@ -756,13 +756,13 @@ export class PyLiveController implements vscode.Disposable {
     if (!(await this.featureEnabled('dataframe'))) return;
     if (!name) {
       if (!this.kernel.isRunning) {
-        void vscode.window.showInformationMessage('PyLive: start the kernel and create a DataFrame first.');
+        void vscode.window.showInformationMessage('Veil: start the kernel and create a DataFrame first.');
         return;
       }
       await this.refreshVariables();
       const frames = (this.lastVariables?.variables ?? []).filter((v) => v.kind === 'dataframe' || v.kind === 'series');
       if (frames.length === 0) {
-        void vscode.window.showInformationMessage('PyLive: no pandas DataFrame or Series variables in the kernel.');
+        void vscode.window.showInformationMessage('Veil: no pandas DataFrame or Series variables in the kernel.');
         return;
       }
       const pick =
@@ -839,7 +839,7 @@ export class PyLiveController implements vscode.Disposable {
         return;
       case 'copy':
         await vscode.env.clipboard.writeText(msg.text);
-        void vscode.window.setStatusBarMessage('PyLive: copied', 1500);
+        void vscode.window.setStatusBarMessage('Veil: copied', 1500);
         return;
     }
   }

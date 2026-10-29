@@ -156,7 +156,7 @@ class CaptureStream:
         w = self._worker
         if not w.output_truncated:
             w.output_truncated = True
-            self._buf.append("\n[PyLive: output truncated]\n")
+            self._buf.append("\n[Veil: output truncated]\n")
 
     def _flush_locked(self) -> None:
         if self._buf:
@@ -201,7 +201,7 @@ class CaptureStream:
         # UnsupportedOperation (an OSError and ValueError) is what io raises
         # for streams without a descriptor; faulthandler and subprocess
         # handle it.
-        raise io.UnsupportedOperation("PyLive capture stream has no file descriptor")
+        raise io.UnsupportedOperation("Veil capture stream has no file descriptor")
 
     def writelines(self, lines: Any) -> None:
         for line in lines:
@@ -239,7 +239,7 @@ class _BinaryWriter:
         return False
 
     def fileno(self) -> int:
-        raise io.UnsupportedOperation("PyLive capture stream has no file descriptor")
+        raise io.UnsupportedOperation("Veil capture stream has no file descriptor")
 
 
 class _StdinProxy:
@@ -274,7 +274,7 @@ class _StdinProxy:
         return False
 
     def fileno(self) -> int:
-        raise io.UnsupportedOperation("PyLive program input has no file descriptor")
+        raise io.UnsupportedOperation("Veil program input has no file descriptor")
 
     closed = False
 

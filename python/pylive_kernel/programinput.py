@@ -14,7 +14,7 @@ from typing import Any
 NO_INPUT_HINT = (
     "input() needs program input: put it in a file named like your script with "
     "the .in extension (e.g. solution.in next to solution.py), or run "
-    "'PyLive: Edit Program Input'"
+    "'Veil: Edit Program Input'"
 )
 
 

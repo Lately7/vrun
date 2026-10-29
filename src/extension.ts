@@ -1,29 +1,29 @@
 import * as vscode from 'vscode';
-import { PyLiveController } from './controller';
+import { VeilController } from './controller';
 
-let controller: PyLiveController | undefined;
+let controller: VeilController | undefined;
 
-export function activate(context: vscode.ExtensionContext): PyLiveController {
-  const c = new PyLiveController(context);
+export function activate(context: vscode.ExtensionContext): VeilController {
+  const c = new VeilController(context);
   controller = c;
   const reg = (id: string, fn: (...args: unknown[]) => unknown) =>
     context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
-  reg('pylive.startKernel', () => c.startKernel());
-  reg('pylive.restartKernel', () => c.restartKernel());
-  reg('pylive.stopKernel', () => c.stopKernel());
-  reg('pylive.runSelection', () => c.runSelection());
-  reg('pylive.runCell', () => c.runCell());
-  reg('pylive.runFile', () => c.runFile());
-  reg('pylive.toggleLiveMode', () => c.toggleLiveMode());
-  reg('pylive.visualize', () => c.visualize());
-  reg('pylive.toggleLiveVisualize', () => c.toggleLiveVisualize());
-  reg('pylive.openVariables', () => c.openVariables());
-  reg('pylive.openDataFrame', (name?: unknown) => c.openDataFrame(typeof name === 'string' ? name : undefined));
-  reg('pylive.interrupt', () => c.interrupt());
-  reg('pylive.showLog', () => c.showLog());
-  reg('pylive.clearInlineResults', () => c.clearInlineResults());
-  reg('pylive.editInput', () => c.editProgramInput());
+  reg('veil.startKernel', () => c.startKernel());
+  reg('veil.restartKernel', () => c.restartKernel());
+  reg('veil.stopKernel', () => c.stopKernel());
+  reg('veil.runSelection', () => c.runSelection());
+  reg('veil.runCell', () => c.runCell());
+  reg('veil.runFile', () => c.runFile());
+  reg('veil.toggleLiveMode', () => c.toggleLiveMode());
+  reg('veil.visualize', () => c.visualize());
+  reg('veil.toggleLiveVisualize', () => c.toggleLiveVisualize());
+  reg('veil.openVariables', () => c.openVariables());
+  reg('veil.openDataFrame', (name?: unknown) => c.openDataFrame(typeof name === 'string' ? name : undefined));
+  reg('veil.interrupt', () => c.interrupt());
+  reg('veil.showLog', () => c.showLog());
+  reg('veil.clearInlineResults', () => c.clearInlineResults());
+  reg('veil.editInput', () => c.editProgramInput());
   context.subscriptions.push(c);
   // Returned as the extension API so integration tests can observe state.
   return c;

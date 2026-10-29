@@ -1,4 +1,4 @@
-# PyLive Inspector — more learner-style DSA programs (used to check the visualizer).
+# Veil — more learner-style DSA programs (used to check the visualizer).
 
 # %% Linked list with a wrapper class
 class Node:

@@ -1,7 +1,7 @@
 /**
  * Webview entry: a quiet header (kernel state + a few text buttons), tabs and
  * message routing. The DataFrame and Visualizer tabs only exist when enabled
- * in Settings (pylive.features.*), so the default panel is just
+ * in Settings (veil.features.*), so the default panel is just
  * Variables + Output.
  */
 import { handleResponse, rejectAll, send, vscode } from './api';

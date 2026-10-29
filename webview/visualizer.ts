@@ -158,7 +158,7 @@ export class Visualizer {
     const intro = h(
       'div',
       { class: 'viz-intro' },
-      button('▶ Visualize current file / cell', () => send({ type: 'command', command: 'visualize' }), { cls: 'btn primary', title: 'PyLive: Visualize Algorithm (Ctrl+Alt+V)' }),
+      button('▶ Visualize current file / cell', () => send({ type: 'command', command: 'visualize' }), { cls: 'btn primary', title: 'Veil: Visualize Algorithm (Ctrl+Alt+V)' }),
       button(this.liveViz ? '● Live visualize: ON' : '○ Live visualize: OFF', () => send({ type: 'command', command: 'toggleLiveVisualize' }), {
         cls: `btn ${this.liveViz ? 'on' : ''}`,
         pressed: this.liveViz,
