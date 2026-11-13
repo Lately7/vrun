@@ -19,12 +19,28 @@ LAUNCHER = os.path.join(PY_DIR, "launcher.py")
 sys.path.insert(0, PY_DIR)
 
 
+def full_heap(result: dict[str, Any], k: int = -1) -> dict[str, Any]:
+    """The complete heap at step k of a trace: steps carry heap deltas."""
+    steps = result["steps"]
+    k = k % len(steps)
+    heap: dict[str, Any] = {}
+    for step in steps[: k + 1]:
+        heap.update(step["heap"])
+        for key in step.get("gone", []):
+            heap.pop(key, None)
+    return heap
+
+
 class KernelProc:
-    def __init__(self, cwd: str | None = None) -> None:
+    def __init__(self, cwd: str | None = None, new_session: bool = False) -> None:
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", MPLBACKEND="Agg")
+        # new_session: on POSIX the kernel kills its children only as a
+        # process-group leader (as the extension starts it); the default keeps
+        # exit code 0 for the shutdown tests.
         self.proc = subprocess.Popen(
             [sys.executable, "-u", LAUNCHER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, cwd=cwd or PY_DIR, env=env)
+            stderr=subprocess.PIPE, cwd=cwd or PY_DIR, env=env,
+            start_new_session=new_session and os.name != "nt")
         self.ids = itertools.count(1)
         self.responses: dict[Any, dict[str, Any]] = {}
         self.events: list[dict[str, Any]] = []

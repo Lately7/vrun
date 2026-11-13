@@ -1,8 +1,9 @@
 /**
  * KernelClient against a real Python worker. Set PYLIVE_PYTHON to the
- * interpreter to use (default: `python`).
+ * interpreter to use (default: the repository's .venv, else `python`).
  */
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { KernelClient } from '../../src/kernel/kernelClient';
@@ -10,8 +11,11 @@ import { ExecuteResult, KernelRequestError, KernelStatus, TraceResult, Variables
 
 // Compiled to out/test/unit/, three levels below the repository root.
 const ROOT = path.resolve(__dirname, '..', '..', '..');
+const VENV_PYTHON = process.platform === 'win32'
+  ? path.join(ROOT, '.venv', 'Scripts', 'python.exe')
+  : path.join(ROOT, '.venv', 'bin', 'python');
 const opts = {
-  pythonPath: process.env.PYLIVE_PYTHON || 'python',
+  pythonPath: process.env.PYLIVE_PYTHON || (existsSync(VENV_PYTHON) ? VENV_PYTHON : 'python'),
   launcherPath: path.join(ROOT, 'python', 'launcher.py'),
   cwd: ROOT,
 };

@@ -29,6 +29,8 @@ export interface ErrorInfo {
   traceback: string;
   frames: FrameInfo[];
   userFrame: FrameInfo | null;
+  /** What to do about it, for errors with a known cause (DataLoader workers, torn imports). */
+  hint?: string;
 }
 
 export interface FrameInfo {
@@ -41,6 +43,16 @@ export interface FrameInfo {
 }
 
 export interface Finding {
+  /** Line within the code that was sent (1-based). */
+  line: number;
+  /** The same line in the document (1-based). */
+  fileLine?: number;
+  category: string;
+  message: string;
+}
+
+/** Where a live run stopped: the first statement that may not re-run. */
+export interface StopInfo {
   line: number;
   category: string;
   message: string;
@@ -59,7 +71,8 @@ export interface ExecuteResult {
   elapsedMs?: number;
   value?: { type: string; shortType: string; repr: string; shape?: number[]; dataframe?: boolean; viz?: string | null };
   error?: ErrorInfo;
-  figures?: Array<{ png?: string; error?: string }>;
+  /** png: a rendered figure; html: an interactive (plotly) figure saved as a file. */
+  figures?: Array<{ png?: string; error?: string; html?: string; title?: string }>;
   analysis?: Analysis;
   interrupted?: 'interrupted' | 'timeout';
   outputTruncated?: boolean;
@@ -67,6 +80,12 @@ export interface ExecuteResult {
   skippedLoads?: Array<{ line: number; code: string }>;
   /** Data-loading statements that actually ran in this execution. */
   loadedNow?: Array<{ line: number; code: string }>;
+  /** Live Mode ran the safe beginning of the code and stopped here. */
+  stoppedAt?: StopInfo;
+  /** needs_confirmation: how long the previous run of this training code took. */
+  lastElapsedMs?: number;
+  /** Notes about the run, e.g. notebook magics that were ignored. */
+  notes?: string[];
 }
 
 export interface HeapNode {
@@ -74,11 +93,24 @@ export interface HeapNode {
   [key: string]: unknown;
 }
 
+export interface TraceFrame {
+  func: string;
+  line: number;
+  locals: Array<[string, Encoded]>;
+  /** Call id: the same id on every step of one call (call tree). */
+  fid?: number;
+  /** Parameter names, on the first step of the call only. */
+  params?: string[];
+}
+
 export interface TraceStep {
   line: number;
   event: 'line' | 'return' | 'exception';
-  stack: Array<{ func: string; line: number; locals: Array<[string, Encoded]> }>;
+  stack: TraceFrame[];
+  /** With TraceResult.heapDelta: only the nodes that changed since they were last sent. */
   heap: Record<string, HeapNode>;
+  /** Heap ids no longer sent (over the node cap): drop their older copies. */
+  gone?: string[];
   out: number;
   ret?: Encoded;
   exc?: string;
@@ -88,6 +120,8 @@ export interface TraceStep {
 export interface TraceResult {
   status: 'ok' | 'blocked';
   steps: TraceStep[];
+  /** Steps carry heap deltas; the full heap of step k is steps[0..k] applied in order. */
+  heapDelta?: boolean;
   stopped: string | null;
   error: ErrorInfo | null;
   stdout: string;
@@ -112,6 +146,8 @@ export interface VariableInfo {
   viz?: string | null;
   fitted?: boolean;
   fittedAttrs?: string[];
+  /** A 1-D / 2-D array or CPU tensor that the DataFrame tab can page. */
+  table?: boolean;
   error?: string;
 }
 
@@ -165,6 +201,8 @@ export type RequestType =
   | 'analyze'
   | 'variables.list'
   | 'variables.inspect'
+  | 'variables.image'
+  | 'variables.series'
   | 'dataframe.metadata'
   | 'dataframe.page'
   | 'dataframe.summary'

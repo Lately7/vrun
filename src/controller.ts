@@ -63,6 +63,8 @@ export class VrunController implements vscode.Disposable {
   private readonly liveVizDocs = new Set<string>();
   private readonly disposables: vscode.Disposable[] = [];
   private execCounter = 0;
+  /** Interactive figure files per run; the webview only sends (execId, index). */
+  private figureFiles = new Map<number, string[]>();
   private starting: Promise<void> | undefined;
   private lastVariables: VariablesList | undefined;
   private varsRefreshing = false;
@@ -342,6 +344,7 @@ export class VrunController implements vscode.Disposable {
       execId,
     };
     if (mode === 'live') params.timeoutMs = cfg().get<number>('live.timeoutMs', 5000);
+    else params.confirmAfterMs = Math.max(0, cfg().get<number>('safeMl.confirmAfterSeconds', 5)) * 1000;
     const stdin = this.programInput(doc);
     if (stdin !== undefined) params.stdin = stdin;
     if (mode === 'manual') this.manualRunning++;
@@ -364,6 +367,11 @@ export class VrunController implements vscode.Disposable {
       if (mode === 'manual' && --this.manualRunning === 0) this.releaseDeferredLive();
     }
 
+    const html = (result.figures ?? []).map((f) => f.html ?? '');
+    if (html.some(Boolean)) {
+      this.figureFiles.set(execId, html);
+      while (this.figureFiles.size > 30) this.figureFiles.delete(this.figureFiles.keys().next().value!);
+    }
     const stale = liveCheck !== undefined && !liveCheck();
     if (!stale) {
       this.panel.post({ type: 'execEnd', execId, result });
@@ -378,9 +386,16 @@ export class VrunController implements vscode.Disposable {
 
   private async confirmRetrain(result: ExecuteResult): Promise<boolean> {
     const what = result.analysis?.findings.find((f) => f.category === 'training' || f.category === 'expensive');
+    const took = result.lastElapsedMs !== undefined ? ` Last time it took ${formatSeconds(result.lastElapsedMs)}.` : '';
     const pick = await vscode.window.showWarningMessage(
-      `This code trains a model and already ran in this kernel session (${what?.message ?? 'training detected'}). Run it again?`,
-      { modal: true, detail: 'vrun asks to avoid accidental repeated training. Disable with "vrun.safeMl.confirmRepeatTraining".' },
+      `This code trains a model and already ran in this kernel session (${what?.message ?? 'training detected'}).${took} Run it again?`,
+      {
+        modal: true,
+        detail:
+          'A Keras or PyTorch model that already exists keeps its weights: running fit / the training loop again continues training from them. ' +
+          'Re-run the cell that builds the model to start from scratch. ' +
+          'Settings: "vrun.safeMl.confirmRepeatTraining", "vrun.safeMl.confirmAfterSeconds".',
+      },
       'Run Again',
     );
     return pick === 'Run Again';
@@ -410,12 +425,26 @@ export class VrunController implements vscode.Disposable {
         this.decorations.clearErrors(doc);
         return;
       }
-      const f = result.analysis?.findings[0];
-      if (enabled) this.decorations.setInline(doc, line, `not re-run live — ${f ? f.message : 'see Output'}`);
+      const f = result.stoppedAt ?? result.analysis?.findings[0];
+      const at = this.stopLine(doc, result, startLine) ?? line;
+      if (enabled) this.decorations.setInline(doc, at, `not run live — ${f ? f.message : 'see Output'} · Run Cell to run it`);
     } else {
       this.decorations.clearErrors(doc);
-      if (enabled && result.value) this.decorations.setInline(doc, line, inlineText(result.value));
+      const stop = this.stopLine(doc, result, startLine);
+      if (enabled && result.value && stop === undefined) this.decorations.setInline(doc, line, inlineText(result.value));
+      // Live ran the safe beginning: say where it stopped and why.
+      if (enabled && stop !== undefined && result.stoppedAt) {
+        this.decorations.setInline(doc, stop, `Live stops here — ${result.stoppedAt.message} · Run Cell to run the rest`);
+      }
     }
+  }
+
+  /** 0-based document line of a live stop, if any. */
+  private stopLine(doc: vscode.TextDocument, result: ExecuteResult, startLine: number): number | undefined {
+    const l = result.stoppedAt?.line;
+    if (l === undefined) return undefined;
+    const at = l - 1;
+    return at >= startLine && at < doc.lineCount ? at : undefined;
   }
 
   clearInlineResults(): void {
@@ -651,7 +680,9 @@ export class VrunController implements vscode.Disposable {
       const r = await this.runCode(doc, cell.text, cell.startLine, 'live', `line ${cell.startLine + 1}`, cell.endLine, () =>
         this.scheduler.isCurrent(key, gen),
       );
-      if (!r || r.status !== 'ok') return;
+      // A cell that Live stopped before its training leaves later cells
+      // without a fitted model: they would only show NotFittedError.
+      if (!r || r.status !== 'ok' || r.stoppedAt) return;
     }
   }
 
@@ -696,7 +727,7 @@ export class VrunController implements vscode.Disposable {
         code: scope.code,
         mode,
         execId,
-        maxSteps: cfg().get<number>('trace.maxSteps', 1000),
+        maxSteps: cfg().get<number>('trace.maxSteps', 5000),
         timeoutMs: cfg().get<number>('trace.timeoutMs', 15000),
         ...(stdin !== undefined ? { stdin } : {}),
       });
@@ -760,7 +791,7 @@ export class VrunController implements vscode.Disposable {
         return;
       }
       await this.refreshVariables();
-      const frames = (this.lastVariables?.variables ?? []).filter((v) => v.kind === 'dataframe' || v.kind === 'series');
+      const frames = (this.lastVariables?.variables ?? []).filter((v) => v.kind === 'dataframe' || v.kind === 'series' || v.table === true);
       if (frames.length === 0) {
         void vscode.window.showInformationMessage('vrun: no pandas DataFrame or Series variables in the kernel.');
         return;
@@ -804,6 +835,19 @@ export class VrunController implements vscode.Disposable {
         return;
       case 'inspectVariable':
         return this.forward(msg.requestId, 'variables.inspect', { name: msg.name, maxNodes: 200, maxItems: 100 });
+      case 'seriesVariable':
+        return this.forward(msg.requestId, 'variables.series', {
+          name: msg.name,
+          maxPoints: msg.maxPoints,
+          timeoutMs: cfg().get<number>('inspect.timeoutMs', 20000),
+        });
+      case 'imageVariable':
+        return this.forward(msg.requestId, 'variables.image', {
+          name: msg.name,
+          start: msg.start,
+          count: msg.count,
+          timeoutMs: cfg().get<number>('inspect.timeoutMs', 20000),
+        });
       case 'dfMetadata':
         return this.forward(msg.requestId, 'dataframe.metadata', { name: msg.name });
       case 'dfPage':
@@ -837,6 +881,15 @@ export class VrunController implements vscode.Disposable {
         if (ctx) this.decorations.highlightTraceLine(ctx.uri, msg.line - 1 + ctx.lineOffset);
       }
         return;
+      case 'openFigure': {
+        const file = this.figureFiles.get(msg.execId)?.[msg.index];
+        if (file && file.toLowerCase().endsWith('.html') && path.isAbsolute(file) && fs.existsSync(file)) {
+          await vscode.env.openExternal(vscode.Uri.file(file));
+        } else {
+          void vscode.window.showInformationMessage('vrun: that figure is no longer available; run the cell again.');
+        }
+        return;
+      }
       case 'copy':
         await vscode.env.clipboard.writeText(msg.text);
         void vscode.window.setStatusBarMessage('vrun: copied', 1500);
@@ -860,6 +913,27 @@ export class VrunController implements vscode.Disposable {
     }
   }
 
+  /** Start a practice file from one of the bundled examples (opened unsaved). */
+  async newPracticeFile(): Promise<void> {
+    const dir = path.join(this.context.extensionPath, 'examples');
+    const items = [
+      { label: 'scikit-learn: classify tabular data', file: 'ml_sklearn_tabular.py', detail: 'Pipeline, cross-validation, confusion matrix, grid search (bundled dataset)' },
+      { label: 'PyTorch: a neural network on digits', file: 'ml_pytorch_digits.py', detail: 'Tensors, training loop, loss curve, image preview of the inputs' },
+      { label: 'Keras: a neural network on digits', file: 'ml_keras_digits.py', detail: 'model.fit with its progress bar, History chart' },
+      { label: 'pandas: clean and explore a table', file: 'pandas_demo.py', detail: 'Load once, Live cells, DataFrame viewer' },
+      { label: 'Algorithms: sorting, binary search, two pointers', file: 'dsa_sort_search.py', detail: 'Visualizer: bars, pointers, sliding window, values of the current line' },
+      { label: 'Algorithms: recursion and backtracking', file: 'dsa_recursion.py', detail: 'Recursion tree of fib, merge sort, permutations' },
+      { label: 'Algorithms: graphs and grids', file: 'dsa_graphs.py', detail: 'BFS, DFS, islands on a grid, Dijkstra, union-find' },
+      { label: 'Data structures: linked list, stack, BST, heap, trie', file: 'dsa_structures.py', detail: 'Pointers on nodes, heap as a tree, trie' },
+      { label: 'Algorithms: a quick tour', file: 'dsa_demo.py', detail: 'Visualizer: arrays, graphs, trees' },
+    ].filter((i) => fs.existsSync(path.join(dir, i.file)));
+    const pick = await vscode.window.showQuickPick(items, { placeHolder: 'Start a practice file from…', matchOnDetail: true });
+    if (!pick) return;
+    const content = fs.readFileSync(path.join(dir, pick.file), 'utf8');
+    const doc = await vscode.workspace.openTextDocument({ language: 'python', content });
+    await vscode.window.showTextDocument(doc);
+  }
+
   showLog(): void {
     this.output.show();
   }
@@ -869,4 +943,8 @@ export class VrunController implements vscode.Disposable {
     this.kernel.dispose();
     for (const d of this.disposables) d.dispose();
   }
+}
+
+function formatSeconds(ms: number): string {
+  return ms < 60_000 ? `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s` : `${Math.round(ms / 60_000)} min`;
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from conftest import full_heap
 from pylive_kernel import safety, tracer
 
 BUBBLE = """
@@ -25,7 +26,7 @@ def test_trace_records_steps_and_final_state():
     assert res["stdout"] == "[1, 2, 4, 5]\n"
     last = res["steps"][-1]
     arr_ref = _locals(last)["arr"]["ref"]
-    items = last["heap"][str(arr_ref)]["items"]
+    items = full_heap(res)[str(arr_ref)]["items"]
     assert items == [1, 2, 4, 5]
     # The same list keeps the same id across steps.
     first_ref = _locals(res["steps"][1])["arr"]["ref"]
@@ -80,10 +81,11 @@ visited = set()
     res = tracer.run_trace(code)
     last = res["steps"][-1]
     loc = _locals(last)
-    root = last["heap"][str(loc["root"]["ref"])]
+    heap = full_heap(res)
+    root = heap[str(loc["root"]["ref"])]
     assert root["type"] == "TreeNode"
     assert {f[0] for f in root["fields"]} == {"val", "left", "right"}
-    graph = last["heap"][str(loc["graph"]["ref"])]
+    graph = heap[str(loc["graph"]["ref"])]
     assert graph["kind"] == "dict" and graph["len"] == 4
 
 
@@ -107,7 +109,8 @@ def test_safety_flags_ml_and_io():
         "model.fit(X, y)": "training",
         "GridSearchCV(est, grid)": "expensive",
         "cross_val_score(m, X, y)": "expensive",
-        "torch_model.train()": "training",
+        "xgb.train(params, dtrain)": "training",
+        "optimizer.step()": "training",
         "pd.read_excel('a.xlsx')": "load",  # loaded once by Live Mode, see test_load_once.py
         "df.to_csv('out.csv')": "io",
         "open('f')": "io",
@@ -123,9 +126,11 @@ def test_safety_flags_ml_and_io():
 
 
 def test_safety_allows_lightweight_pandas():
+    # model.train() / model.eval() only switch dropout and batch norm of a
+    # torch module (the kernel says which names hold one).
     for code in ("df['Quantity'].mean()", "df['Quantity'].median()", "x = arr.to_numpy()",
-                 "pd.to_datetime(s)", "sorted(a)"):
-        assert safety.analyze_source(code)["safe"], code
+                 "pd.to_datetime(s)", "sorted(a)", "model.train()", "model.eval()"):
+        assert safety.analyze_source(code, torch_modules=frozenset({"model"}))["safe"], code
 
 
 def test_safety_manual_marker():

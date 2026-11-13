@@ -27,6 +27,14 @@ function spaceFreeTempBase(): string {
   throw new Error('No temp directory without spaces; set PYLIVE_IT_TMP to one.');
 }
 
+/** The repository's .venv (as `npm run test:py` uses), else `python` on PATH. */
+function defaultPython(root: string): string {
+  const venv = process.platform === 'win32'
+    ? path.join(root, '.venv', 'Scripts', 'python.exe')
+    : path.join(root, '.venv', 'bin', 'python');
+  return fs.existsSync(venv) ? venv : 'python';
+}
+
 async function main(): Promise<void> {
   const root = path.resolve(__dirname, '..', '..', '..');
   const localCode = path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Microsoft VS Code', 'Code.exe');
@@ -63,7 +71,7 @@ async function main(): Promise<void> {
         `--user-data-dir=${path.join(scratch, 'user-data')}`,
         `--extensions-dir=${path.join(scratch, 'extensions')}`,
       ],
-      extensionTestsEnv: { PYLIVE_PYTHON: process.env.PYLIVE_PYTHON ?? 'python', PYLIVE_IT_WORKSPACE: workspace },
+      extensionTestsEnv: { PYLIVE_PYTHON: process.env.PYLIVE_PYTHON ?? defaultPython(root), PYLIVE_IT_WORKSPACE: workspace },
     });
   } finally {
     if (workspace) fs.rmSync(workspace, { recursive: true, force: true });

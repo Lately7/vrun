@@ -64,12 +64,29 @@ are replaced by a `message_too_large` error.
 | `analyze`            | main queue   | AST safety heuristics only                      |
 | `variables.list`     | main queue   | cheap metadata for all user variables           |
 | `variables.inspect`  | main queue   | bounded detail + structure view of one variable |
+| `variables.image`    | main queue   | PNG grid (stdlib zlib) of up to 16 images from an image-shaped array / tensor |
+| `variables.series`   | main queue   | downsampled numbers over time (losses, history dicts, Keras History) |
 | `dataframe.metadata` | main queue   | shape, dtypes, memory (shallow)                 |
 | `dataframe.page`     | main queue   | rows `[offset, offset+limit)` with optional full-data sort/filter |
 | `dataframe.summary`  | main queue   | null counts / describe (full scan, on demand)   |
 | `interrupt`          | reader thread| interrupt the currently running task            |
 | `cancel`             | reader thread| drop a queued (not yet started) request         |
 | `shutdown`           | reader thread| exit                                            |
+
+Captured output (`outbuf.py`): stdout and stderr append to one ordered
+segment buffer, flushed every 50 ms or 8 KB (user `flush()` calls are
+batched to the same rate). Frames that a later `\r` overwrites are dropped
+before sending. A run may send 2 MB: past the head budget, output goes to a
+256 KB tail that is sent, after a marker, when the task ends. The streams
+report `isatty()` true; the webview's terminal model (`webview/terminal.ts`)
+interprets `\r`, `\b`, SGR colours and cursor / erase codes.
+
+Processes started by user code join the kernel's Windows Job Object
+(`KILL_ON_JOB_CLOSE`), or its POSIX process group, so they end with it.
+When matplotlib is imported in the kernel, an import hook switches it to the
+kernel's own backend (`mpl_backend.py`): Agg drawing, with `plt.show()`
+handing figures to the run in order. `MPLBACKEND` stays `Agg`, because child
+processes inherit it and cannot import `pylive_kernel`.
 
 Variable handles are `{session, revision, name}`. A request carrying a session
 that is not the worker's current session is rejected with `stale_handle`
@@ -136,10 +153,27 @@ Null counts and `describe()` are computed only when the user asks.
 namespace (the persistent namespace is untouched) under `sys.settrace`, and
 records a snapshot per executed line of user code: line number, call stack,
 locals of each user frame, and a heap of referenced objects (lists, dicts,
-sets, tuples, user objects with `__dict__`/`__slots__`) with stable ids. Hard
-limits: steps (default 1000), objects per snapshot, items per container,
-total bytes, wall time. Exceeding a limit stops the trace cleanly and the
-partial trace is still shown. The webview infers views from the data:
+sets, tuples, user objects with `__dict__`/`__slots__`) with stable ids.
+
+The snapshots are compact:
+
+* **Heap deltas** (`heapDelta: true`): a step carries only the heap nodes
+  whose encoding changed since they were last sent; `gone` lists ids that
+  fell over the node cap, so an older copy is never shown as current. The
+  webview (`traceModel.ts`) rebuilds the heap of any step from checkpoints
+  every 64 steps.
+* **Frames:** a suspended caller cannot change its own locals, so only the
+  top frame, the module frame and frames with closure cells are re-encoded
+  on each step; the others reuse their last encoding. Their objects can only
+  change through a frame that reaches them, which is encoded. This keeps a
+  1000-deep recursion linear (about 0.4 s instead of several seconds).
+* **Calls:** every frame has a call id (`fid`) and, on its first step, its
+  parameter names (`params`). The webview builds the recursion tree, step
+  over / step out and per-line run counts from them.
+
+Hard limits: steps (default 5000), objects per snapshot, items per
+container, total bytes, wall time. Exceeding a limit stops the trace cleanly
+and the partial trace is still shown. The webview infers views from the data:
 
 | Data shape                              | View                          |
 |-----------------------------------------|-------------------------------|

@@ -52,6 +52,8 @@ export type WebviewMessage =
   | { type: 'command'; command: WebviewCommand }
   | { type: 'refreshVariables' }
   | { type: 'inspectVariable'; requestId: number; name: string }
+  | { type: 'imageVariable'; requestId: number; name: string; start: number; count: number }
+  | { type: 'seriesVariable'; requestId: number; name: string; maxPoints: number }
   | { type: 'openDataFrame'; name: string }
   | { type: 'dfMetadata'; requestId: number; name: string }
   | {
@@ -69,6 +71,7 @@ export type WebviewMessage =
   | { type: 'dfSummary'; requestId: number; name: string; revision: number }
   | { type: 'dfColumn'; requestId: number; name: string; revision: number; column: number }
   | { type: 'traceStep'; execId: number; line: number }
+  | { type: 'openFigure'; execId: number; index: number }
   | { type: 'copy'; text: string };
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,199}$/;
@@ -94,6 +97,14 @@ export function validateWebviewMessage(raw: unknown): WebviewMessage | undefined
     case 'inspectVariable':
       return isName(m.name) && isInt(m.requestId, 0, Number.MAX_SAFE_INTEGER)
         ? { type: 'inspectVariable', requestId: m.requestId, name: m.name }
+        : undefined;
+    case 'imageVariable':
+      return isName(m.name) && isInt(m.requestId, 0, Number.MAX_SAFE_INTEGER) && isInt(m.start, 0, Number.MAX_SAFE_INTEGER) && isInt(m.count, 1, 64)
+        ? { type: 'imageVariable', requestId: m.requestId, name: m.name, start: m.start, count: m.count }
+        : undefined;
+    case 'seriesVariable':
+      return isName(m.name) && isInt(m.requestId, 0, Number.MAX_SAFE_INTEGER) && isInt(m.maxPoints, 20, 5000)
+        ? { type: 'seriesVariable', requestId: m.requestId, name: m.name, maxPoints: m.maxPoints }
         : undefined;
     case 'openDataFrame':
       return isName(m.name) ? { type: 'openDataFrame', name: m.name } : undefined;
@@ -152,6 +163,10 @@ export function validateWebviewMessage(raw: unknown): WebviewMessage | undefined
     case 'traceStep':
       return isInt(m.line, 1, 10_000_000) && isInt(m.execId, 0, Number.MAX_SAFE_INTEGER)
         ? { type: 'traceStep', execId: m.execId, line: m.line }
+        : undefined;
+    case 'openFigure':
+      return isInt(m.execId, 0, Number.MAX_SAFE_INTEGER) && isInt(m.index, 0, 64)
+        ? { type: 'openFigure', execId: m.execId, index: m.index }
         : undefined;
     case 'copy':
       return typeof m.text === 'string' && m.text.length <= 1_000_000 ? { type: 'copy', text: m.text } : undefined;

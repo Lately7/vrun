@@ -24,6 +24,7 @@ export function activate(context: vscode.ExtensionContext): VrunController {
   reg('vrun.showLog', () => c.showLog());
   reg('vrun.clearInlineResults', () => c.clearInlineResults());
   reg('vrun.editInput', () => c.editProgramInput());
+  reg('vrun.newPracticeFile', () => c.newPracticeFile());
   context.subscriptions.push(c);
   // Returned as the extension API so integration tests can observe state.
   return c;

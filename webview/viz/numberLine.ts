@@ -37,10 +37,12 @@ export function renderNumberLine(marks: Mark[], points: number[] = [], title = '
     const text = `${m.label}=${fmtNumber(m.value)}`;
     const w = text.length * 6.5 + 6;
     const cx = X(m.value);
+    // Labels of values near either end stay inside the drawing.
+    const lx = Math.min(Math.max(cx, w / 2 + 2), width - w / 2 - 2);
     let row = 0;
-    while (rowEnds[row] !== undefined && rowEnds[row] > cx - w / 2) row++;
-    rowEnds[row] = cx + w / 2;
-    return { ...m, text, cx, row };
+    while (rowEnds[row] !== undefined && rowEnds[row] > lx - w / 2) row++;
+    rowEnds[row] = lx + w / 2;
+    return { ...m, text, cx, lx, row };
   });
   const rows = Math.max(1, rowEnds.length);
   const axisY = 20 + rows * 16 + 8;
@@ -61,9 +63,12 @@ export function renderNumberLine(marks: Mark[], points: number[] = [], title = '
   for (const m of placed) {
     const color = POINTER_COLORS[m.k % POINTER_COLORS.length];
     const ly = 16 + m.row * 16;
-    svg.appendChild(s('line', { x1: m.cx, x2: m.cx, y1: ly + 3, y2: axisY - 5, class: `ptr-line ${color}` }));
-    svg.appendChild(s('circle', { cx: m.cx, cy: axisY, r: 5, class: `nl-mark ${color}` }));
-    svg.appendChild(s('text', { x: m.cx, y: ly, 'text-anchor': 'middle', class: `ptr-text ${color}` }, m.text));
+    svg.appendChild(
+      s('g', { 'data-anim': `p:${m.label}` },
+        s('line', { x1: m.cx, x2: m.cx, y1: ly + 3, y2: axisY - 5, class: `ptr-line ${color}` }),
+        s('circle', { cx: m.cx, cy: axisY, r: 5, class: `nl-mark ${color}` }),
+        s('text', { x: m.lx, y: ly, 'text-anchor': 'middle', class: `ptr-text ${color}` }, m.text)),
+    );
   }
   return svg;
 }

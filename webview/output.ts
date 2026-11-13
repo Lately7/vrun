@@ -5,6 +5,7 @@
  * small block.
  */
 import { send } from './api';
+import { ConsoleView } from './console';
 import { button, clear, h } from './dom';
 
 interface ExecResult {
@@ -12,9 +13,11 @@ interface ExecResult {
   executionCount: number;
   elapsedMs?: number;
   value?: { type: string; shortType: string; repr: string; shape?: number[]; dataframe?: boolean };
-  error?: { ename: string; evalue: string; traceback: string };
-  figures?: Array<{ png?: string; error?: string }>;
-  analysis?: { findings: Array<{ line: number; category: string; message: string }> };
+  error?: { ename: string; evalue: string; traceback: string; hint?: string };
+  figures?: Array<{ png?: string; error?: string; html?: string; title?: string }>;
+  analysis?: { findings: Array<{ line: number; fileLine?: number; category: string; message: string }> };
+  stoppedAt?: { line: number; category: string; message: string };
+  notes?: string[];
   interrupted?: string;
   outputTruncated?: boolean;
   skippedLoads?: Array<{ line: number; code: string }>;
@@ -23,7 +26,7 @@ interface ExecResult {
 
 interface Block {
   el: HTMLElement;
-  stdout: HTMLElement;
+  stdout: ConsoleView;
   meta: HTMLElement;
   body: HTMLElement;
   docKey: string;
@@ -97,9 +100,9 @@ export class OutputView {
       this.onError(0);
     }
     const meta = h('div', { class: 'run-meta' }, h('span', { class: 'dot-busy', 'aria-hidden': 'true' }), [file, label].filter(Boolean).join('  ·  '));
-    const stdout = h('pre', { class: 'console' });
+    const stdout = new ConsoleView(MAX_STDOUT_CHARS);
     const body = h('div', {});
-    const el = h('div', { class: `run ${mode}` }, meta, stdout, body);
+    const el = h('div', { class: `run ${mode}` }, meta, stdout.el, body);
     this.list.append(el);
     const block: Block = { el, stdout, meta, body, docKey, done: false };
     this.blocks.set(execId, block);
@@ -130,25 +133,8 @@ export class OutputView {
     // Output the kernel could not attribute (background threads, evicted
     // runs) gets its own block instead of being mixed into the latest run.
     const target = (execId !== null && execId !== undefined ? this.blocks.get(execId) : undefined) ?? this.backgroundBlock();
-    const span = h('span', { class: name === 'stderr' ? 'stderr' : '' }, text);
-    target.stdout.appendChild(span);
-    const size = target.stdout.textContent?.length ?? 0;
-    if (size > MAX_STDOUT_CHARS) {
-      // Keep the newest text: drop whole old spans, then trim the oldest
-      // remaining one character-wise (a single huge span must survive).
-      let excess = size - MAX_STDOUT_CHARS;
-      while (excess > 0 && target.stdout.firstChild) {
-        const first = target.stdout.firstChild as HTMLElement;
-        const len = first.textContent?.length ?? 0;
-        if (len <= excess && first !== target.stdout.lastChild) {
-          first.remove();
-          excess -= len;
-        } else {
-          first.textContent = '[… earlier output trimmed]\n' + (first.textContent ?? '').slice(excess);
-          excess = 0;
-        }
-      }
-    }
+    // Terminal semantics: progress bars redraw their line, ANSI colours show.
+    target.stdout.write(name, text);
     this.follow(bottom);
   }
 
@@ -203,13 +189,15 @@ export class OutputView {
       return;
     }
     if (result.status === 'blocked') {
-      note('skipped by Live Mode');
-      const f = result.analysis?.findings[0];
-      if (f) b.body.appendChild(h('div', { class: 'muted small' }, `line ${f.line}: ${f.message}`));
+      note('not run by Live Mode');
+      const f = result.stoppedAt ?? result.analysis?.findings[0];
+      const line = result.stoppedAt?.line ?? result.analysis?.findings[0]?.fileLine ?? f?.line;
+      if (f) b.body.appendChild(h('div', { class: 'muted small' }, `line ${line}: ${f.message}. Run the cell (Ctrl+Alt+C) to run it.`));
       this.follow(bottom);
       return;
     }
     note(formatMs(result.elapsedMs));
+    for (const n of result.notes ?? []) b.body.appendChild(h('p', { class: 'muted small' }, n));
     if (result.value) {
       const v = result.value;
       const shape = v.shape ? `${v.shortType} ${v.shape.join(' × ')}` : '';
@@ -217,16 +205,21 @@ export class OutputView {
       if (shape) {
         const line = h('div', { class: 'muted small' }, shape);
         // `dataframe` is false for a Series, which the viewer shows too.
-        if (v.dataframe !== undefined && this.dataframeEnabled()) {
-          line.append('  ', button('open', () => this.openDataFrame('_'), { cls: 'link-btn', title: 'Open the result (_) in the DataFrame tab' }));
+        if (v.dataframe !== undefined) {
+          // With the tab off, the host offers to turn it on first.
+          const open = () => (this.dataframeEnabled() ? this.openDataFrame('_') : send({ type: 'openDataFrame', name: '_' }));
+          line.append('  ', button('open', open, { cls: 'link-btn', title: 'Open the result (_) in the DataFrame tab: all rows, sort, filter, statistics' }));
         }
         b.body.appendChild(line);
       }
     }
-    for (const f of result.figures ?? []) {
+    (result.figures ?? []).forEach((f, index) => {
       if (f.png) b.body.appendChild(h('img', { class: 'figure', src: `data:image/png;base64,${f.png}`, alt: 'matplotlib figure' }));
-      else if (f.error) b.body.appendChild(h('p', { class: 'muted small' }, f.error));
-    }
+      else if (f.html) {
+        // Plotly: fig.show() saved an interactive page; opening it is the learner's click.
+        b.body.appendChild(h('p', { class: 'figure-link' }, button(`Open interactive figure ↗`, () => send({ type: 'openFigure', execId, index }), { cls: 'link-btn', title: 'Opens the plotly figure in your browser' }), h('span', { class: 'muted small' }, `  ${f.title ?? ''}`)));
+      } else if (f.error) b.body.appendChild(h('p', { class: 'muted small' }, f.error));
+    });
     if (result.outputTruncated) b.body.appendChild(h('p', { class: 'muted small' }, 'Output was truncated (2 MB per run).'));
     if (result.interrupted) {
       b.body.appendChild(h('p', { class: 'muted small' }, result.interrupted === 'timeout'
@@ -238,13 +231,18 @@ export class OutputView {
       this.onError(this.errorCount);
       const details = h('details', { class: 'traceback' }, h('summary', {}, `${result.error.ename}: ${result.error.evalue}`), h('pre', {}, result.error.traceback));
       b.body.appendChild(details);
+      if (result.error.hint) b.body.appendChild(h('p', { class: 'hint small' }, result.error.hint));
       // input() without a .in file: offer to create it right here.
       if (result.error.ename === 'EOFError' && result.error.evalue.includes('.in')) {
         b.body.appendChild(button('Create the .in input file', () => send({ type: 'command', command: 'editInput' }), { cls: 'link-btn' }));
       }
     }
-    const ml = result.analysis?.findings.filter((x) => x.category === 'training' || x.category === 'expensive');
-    if (ml?.length) b.body.appendChild(h('p', { class: 'muted small' }, 'Model training: never re-run by Live Mode.'));
+    if (result.stoppedAt) {
+      b.body.appendChild(h('p', { class: 'muted small' }, `Live ran up to line ${result.stoppedAt.line}: ${result.stoppedAt.message}. Run the cell (Ctrl+Alt+C) to run the rest.`));
+    } else {
+      const ml = result.analysis?.findings.filter((x) => x.category === 'training' || x.category === 'expensive');
+      if (ml?.length) b.body.appendChild(h('p', { class: 'muted small' }, 'Model training: never re-run by Live Mode.'));
+    }
     // "Load once": say quietly which data was reused instead of re-read.
     const reused = result.skippedLoads ?? [];
     if (reused.length) {

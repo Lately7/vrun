@@ -1,0 +1,60 @@
+{
+  "vrun: seed everything": {
+    "prefix": "vrun-seed",
+    "description": "Make random numbers repeatable (Python, NumPy, PyTorch, TensorFlow/Keras)",
+    "body": [
+      "SEED = ${1:42}",
+      "import random",
+      "import numpy as np",
+      "random.seed(SEED)",
+      "np.random.seed(SEED)",
+      "try:",
+      "    import torch",
+      "    torch.manual_seed(SEED)",
+      "except ImportError:",
+      "    pass",
+      "try:",
+      "    import keras",
+      "    keras.utils.set_random_seed(SEED)",
+      "except ImportError:",
+      "    pass",
+      "$0"
+    ]
+  },
+  "vrun: train / test split + pipeline": {
+    "prefix": "vrun-sklearn",
+    "description": "scikit-learn: split, scale, fit, score",
+    "body": [
+      "from sklearn.model_selection import train_test_split",
+      "from sklearn.pipeline import make_pipeline",
+      "from sklearn.preprocessing import StandardScaler",
+      "from sklearn.${1:linear_model} import ${2:LogisticRegression}",
+      "",
+      "X_train, X_test, y_train, y_test = train_test_split(${3:X}, ${4:y}, test_size=0.2, random_state=42)",
+      "model = make_pipeline(StandardScaler(), $2($5))",
+      "model.fit(X_train, y_train)",
+      "model.score(X_test, y_test)$0"
+    ]
+  },
+  "vrun: PyTorch training loop": {
+    "prefix": "vrun-torch-loop",
+    "description": "A minimal PyTorch training loop that records losses for the chart",
+    "body": [
+      "losses = []",
+      "for epoch in range(${1:20}):",
+      "    ${2:model}.train()",
+      "    for xb, yb in ${3:train_loader}:",
+      "        ${4:optimizer}.zero_grad()",
+      "        loss = ${5:loss_fn}($2(xb), yb)",
+      "        loss.backward()",
+      "        $4.step()",
+      "    losses.append(loss.item())",
+      "print(f\"epoch {epoch}: loss {losses[-1]:.4f}\")$0"
+    ]
+  },
+  "vrun: cell": {
+    "prefix": "vrun-cell",
+    "description": "A new # %% cell (Ctrl+Alt+C runs it; [live] cells re-run as you type)",
+    "body": ["# %% ${1:title}", "$0"]
+  }
+}

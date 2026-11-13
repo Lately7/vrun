@@ -180,11 +180,41 @@ table.kv { border-collapse: collapse; font-family: var(--vscode-editor-font-fami
 .console.small { max-height: 160px; overflow-y: auto; white-space: pre-wrap; }
 .console .stderr { color: color-mix(in srgb, var(--err) 80%, var(--vscode-foreground)); }
 .console.value { color: var(--vscode-foreground); }
+/* Terminal lines (webview/console.ts). An empty line keeps its height; the
+   trailing line after a final newline is the cursor line, not output. */
+.console .ln { min-height: 1lh; }
+.console .ln:last-child:empty { display: none; }
+.console .trim-note { color: var(--muted); font-style: italic; }
+/* tqdm / Keras draw progress on stderr: a redrawn line is progress, not an error. */
+.console .ln.progress .stderr { color: var(--vscode-foreground); }
+.console .a-b { font-weight: 600; }
+.console .a-dim { opacity: 0.7; }
+.console .a-i { font-style: italic; }
+.console .a-u { text-decoration: underline; }
+.console .a-fg0 { color: var(--vscode-terminal-ansiBlack, #000); }
+.console .a-fg1 { color: var(--vscode-terminal-ansiRed, #cd3131); }
+.console .a-fg2 { color: var(--vscode-terminal-ansiGreen, #0dbc79); }
+.console .a-fg3 { color: var(--vscode-terminal-ansiYellow, #c8a600); }
+.console .a-fg4 { color: var(--vscode-terminal-ansiBlue, #2472c8); }
+.console .a-fg5 { color: var(--vscode-terminal-ansiMagenta, #bc3fbc); }
+.console .a-fg6 { color: var(--vscode-terminal-ansiCyan, #11a8cd); }
+.console .a-fg7 { color: var(--vscode-terminal-ansiWhite, #a0a0a0); }
+.console .a-fg8 { color: var(--vscode-terminal-ansiBrightBlack, #666); }
+.console .a-fg9 { color: var(--vscode-terminal-ansiBrightRed, #f14c4c); }
+.console .a-fg10 { color: var(--vscode-terminal-ansiBrightGreen, #23d18b); }
+.console .a-fg11 { color: var(--vscode-terminal-ansiBrightYellow, #d7ba00); }
+.console .a-fg12 { color: var(--vscode-terminal-ansiBrightBlue, #3b8eea); }
+.console .a-fg13 { color: var(--vscode-terminal-ansiBrightMagenta, #d670d6); }
+.console .a-fg14 { color: var(--vscode-terminal-ansiBrightCyan, #29b8db); }
+.console .a-fg15 { color: var(--vscode-terminal-ansiBrightWhite, #888); }
 details.traceback { margin-top: 3px; }
 details.traceback summary { color: color-mix(in srgb, var(--err) 85%, var(--vscode-foreground)); cursor: pointer; font-family: var(--vscode-editor-font-family); }
 .traceback pre { color: var(--muted); font-family: var(--vscode-editor-font-family); white-space: pre-wrap; margin: 4px 0; font-size: 0.92em; }
 .error-title { font-weight: 600; color: var(--err); }
 img.figure { max-width: 100%; background: white; border-radius: 3px; margin: 4px 0; }
+/* Arrays shown as pictures: scaled up with hard pixel edges (8 x 8 digits). */
+img.array-image { display: block; image-rendering: pixelated; max-width: 100%; height: auto; margin: 4px 0; border-radius: 2px; }
+.image-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 
 /* visualizer */
 .viz-intro { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
@@ -276,3 +306,74 @@ table.matrix { border-collapse: collapse; font-family: var(--vscode-editor-font-
 
 /* "Reused data, not re-read: line 2  df = pd.read_csv(...)" */
 .reuse code { font-family: var(--vscode-editor-font-family); opacity: 0.85; }
+
+/* Training curves (webview/viz/lineChart.ts) */
+svg .curve { fill: none; stroke-width: 1.8; stroke-linejoin: round; }
+svg .curve-dot { stroke: none; }
+svg .curve-best { fill: none; stroke-width: 2; }
+.series-0 { --c: var(--p0); } .series-1 { --c: var(--p4); } .series-2 { --c: var(--p2); }
+.series-3 { --c: var(--p3); } .series-4 { --c: var(--p1); } .series-5 { --c: var(--p5); }
+svg .curve[class*="series-"], svg .curve-best[class*="series-"] { stroke: var(--c); }
+svg .curve-dot[class*="series-"] { fill: var(--c); }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin: 2px 0 4px; }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+.legend-item .swatch { width: 12px; height: 3px; border-radius: 2px; background: var(--c); display: inline-block; }
+.hint { color: var(--muted); margin: 4px 0; }
+/* 2-D array window in the Variables detail row */
+table.array-grid { border-collapse: collapse; font-family: var(--vscode-editor-font-family); font-variant-numeric: tabular-nums; font-size: 0.92em; }
+.array-grid th { color: var(--muted); font-weight: normal; padding: 1px 6px; text-align: right; }
+.array-grid td { padding: 1px 6px; text-align: right; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+
+/* -- step animation -- */
+/* Changed values flash once when a step draws them (views are rebuilt each step). */
+@keyframes vrun-flash { from { filter: brightness(2.2); } to { filter: none; } }
+.visualizer:not(.no-anim) .viz-card .changed,
+.visualizer:not(.no-anim) .frames tr.changed td { animation: vrun-flash 0.5s ease-out; }
+.frames tr.changed td { color: var(--changed); }
+@media (prefers-reduced-motion: reduce) {
+  .visualizer .viz-card .changed, .visualizer .frames tr.changed td { animation: none; }
+}
+/* Code panel: click a line to run to it; how often each line ran. */
+ol.code li.runnable { cursor: pointer; }
+ol.code li.runnable:hover { background: var(--vscode-list-hoverBackground); }
+ol.code li.cur.runnable:hover { background: var(--vscode-editor-stackFrameHighlightBackground, rgba(255, 255, 0, 0.2)); }
+ol.code .hits { display: inline-block; width: 4.5ch; margin-right: 1ch; text-align: right; color: var(--muted); font-size: 0.82em; opacity: 0.75; }
+.line-watch { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 2px 0 4px; font-family: var(--vscode-editor-font-family); font-size: 0.92em; }
+.line-watch .watch code { color: var(--muted); }
+.line-watch .watch b { color: var(--p0); }
+/* Recursion tree */
+svg .call rect { fill: var(--vscode-editor-background); stroke: var(--muted); stroke-width: 1; }
+svg .call { cursor: pointer; }
+svg .call.done rect { stroke: var(--border); }
+svg .call.done .call-text { fill: var(--muted); }
+svg .call.active rect { stroke: var(--p0); stroke-width: 1.5; }
+svg .call.current rect { fill: var(--p0); fill-opacity: 0.35; stroke: var(--p0); stroke-width: 2; }
+svg .call-text { font-size: 11px; }
+svg .call-ret { fill: var(--p2); font-size: 10px; font-weight: 600; paint-order: stroke; stroke: var(--vscode-editor-background); stroke-width: 3px; }
+svg.viz-svg.no-shrink { max-width: none; }
+svg .edge.hot-call { stroke: var(--p0); stroke-width: 2; }
+.btn.small { padding: 1px 6px; font-size: 0.88em; }
+
+/* -- DSA views -- */
+/* Range between bound pointers (lo..hi, left..right), drawn faintly over the cells. */
+svg .range-shade { fill: var(--accent); fill-opacity: 0.13; stroke: var(--accent); stroke-opacity: 0.55; stroke-dasharray: 3 2; pointer-events: none; }
+/* Tries: the character on the edge, the end of a word as a double circle. */
+svg .edge-key { fill: var(--p4); font-size: 11px; font-weight: 700; }
+svg .tnode-end { fill: none; stroke: var(--vscode-foreground); stroke-width: 1.2; }
+svg .tnode.root { stroke-width: 2.5; }
+/* Graph: the edge from the current vertex to the neighbour being examined (the red path stays distinct). */
+svg .edge.cur-edge { stroke: var(--p0); stroke-width: 3; }
+svg .gnode.neighbor { stroke: var(--p0); stroke-width: 2.5; stroke-dasharray: 4 2; }
+/* Grid cells held by visited / queue / path collections, and cells probed with a second index pair. */
+.matrix td.visited { background: color-mix(in srgb, var(--p2) 38%, transparent); }
+.matrix td.frontier { box-shadow: inset 0 0 0 2px var(--p4); }
+.matrix td.cross.frontier { box-shadow: inset 0 0 0 2px var(--p4), inset 0 0 0 999px color-mix(in srgb, var(--accent) 10%, transparent); }
+.matrix td.onpath { background: color-mix(in srgb, var(--p1) 35%, transparent); }
+.matrix td.probe { outline: 2px dashed var(--p3); outline-offset: -2px; }
+/* DP over strings: the character as the header, its index below. */
+.matrix th.ch { line-height: 1.05; }
+.matrix th.ch .axis-ch { display: block; color: var(--vscode-foreground); font-weight: 600; }
+.matrix th.ch.hl .axis-ch { color: var(--p0); }
+.matrix th.ch .axis-ix { display: block; font-size: 0.8em; }
+/* Weights and distances stay readable where they cross an edge. */
+svg .dist-text, svg .edge-label { paint-order: stroke; stroke: var(--vscode-editor-background); stroke-width: 3px; stroke-linejoin: round; }

@@ -22,27 +22,39 @@ import os
 import pathlib
 import queue
 import secrets
+import tempfile
 import signal
 import sys
 import threading
 import time
+import types
 import weakref
 from dataclasses import dataclass
 from typing import Any, BinaryIO, Callable
 
-from . import dataframe, executor, inspector, safety, tracer
+from . import children, dataframe, executor, heap, images, inspector, magics, outbuf, safety, series, tracer, warnfold
 from .programinput import NO_INPUT_HINT, ProgramInput
-from .serialize import type_name
+from .serialize import type_module, type_name, type_qualname
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
-STREAM_FLUSH_BYTES = 8192
-STREAM_FLUSH_SECONDS = 0.05
-MAX_OUTPUT_PER_EXEC = 2 * 1024 * 1024  # UTF-8 bytes
-STREAM_CHUNK_CHARS = 256 * 1024
+# A first `import torch` / `import tensorflow` takes 3-15 s; later imports are
+# free (sys.modules). Imports therefore get their own bound in Live Mode
+# instead of eating the per-run budget meant for the user's code.
+LIVE_IMPORT_SECONDS = 60.0
+# Interrupting these half-way leaves them unimportable for the life of the
+# process ("torch can only be initialized once"): an interrupt that arrives
+# during their first import waits until the import statement has finished.
+UNTEARABLE_IMPORTS = {
+    "torch", "torchvision", "torchaudio", "tensorflow", "keras", "jax", "transformers",
+    "numpy", "pandas", "scipy", "sklearn", "matplotlib", "seaborn", "xgboost", "lightgbm",
+    "catboost", "cv2", "polars", "statsmodels", "plotly", "tensorflow_datasets", "datasets",
+    "timm", "lightning", "pytorch_lightning", "tf_keras",
+}
 CONTROL_TYPES = {"interrupt", "cancel", "shutdown", "ping"}
 TASK_TYPES = {
-    "execute", "trace", "analyze", "variables.list", "variables.inspect",
+    "execute", "trace", "analyze", "variables.list", "variables.inspect", "variables.image",
+    "variables.series",
     "dataframe.metadata", "dataframe.page", "dataframe.summary", "dataframe.column",
 }
 _NO_VALUE = object()
@@ -92,7 +104,7 @@ class Writer:
                 self._stream.write(item)
                 self._stream.flush()
             except OSError:
-                os._exit(0)  # host went away
+                children.exit_process(0)  # host went away
 
     def close(self, timeout: float = 2.0) -> None:
         self._queue.put(None)
@@ -104,7 +116,11 @@ def _json_default(o: Any) -> Any:
 
 
 class CaptureStream:
-    """Replacement for sys.stdout/sys.stderr that emits batched stream events."""
+    """Replacement for sys.stdout/sys.stderr that emits batched stream events.
+
+    Both streams share one ordered buffer (outbuf.OutputBuffer): ordering,
+    the per-run budget and progress-bar compaction live there.
+    """
 
     encoding = "utf-8"
     errors = "replace"
@@ -112,68 +128,16 @@ class CaptureStream:
     def __init__(self, worker: Worker, name: str) -> None:
         self._worker = worker
         self.name = name
-        self._buf: list[str] = []
-        self._size = 0
-        self._last = time.monotonic()
-        self._lock = threading.Lock()
-        self._exec_id: Any = None
         self._binary = _BinaryWriter(self)
 
     def write(self, s: str) -> int:
         if not isinstance(s, str):
             raise TypeError(f"write() argument must be str, not {type(s).__name__}")
-        exec_id = self._worker.exec_id_for_current_thread()
-        with self._lock:
-            if exec_id != self._exec_id:
-                # Never merge text of two executions into one event.
-                self._flush_locked()
-                self._exec_id = exec_id
-            w = self._worker
-            room = MAX_OUTPUT_PER_EXEC - w.output_bytes
-            if room <= 0:
-                self._mark_truncated()
-                return len(s)
-            # Budget in UTF-8 bytes: the protocol limit is in bytes, and one
-            # character can take up to 4.
-            encoded = s.encode("utf-8", "surrogatepass")
-            if len(encoded) > room:
-                chunk = encoded[:room].decode("utf-8", "ignore")
-                w.output_bytes = MAX_OUTPUT_PER_EXEC
-                self._buf.append(chunk)
-                self._size += len(chunk)
-                self._mark_truncated()
-            else:
-                chunk = s
-                w.output_bytes += len(encoded)
-                self._buf.append(chunk)
-                self._size += len(chunk)
-            now = time.monotonic()
-            if self._size >= STREAM_FLUSH_BYTES or now - self._last >= STREAM_FLUSH_SECONDS:
-                self._flush_locked()
+        self._worker.outbuf.write(self.name, self._worker.exec_id_for_current_thread(), s)
         return len(s)
 
-    def _mark_truncated(self) -> None:
-        w = self._worker
-        if not w.output_truncated:
-            w.output_truncated = True
-            self._buf.append("\n[vrun: output truncated]\n")
-
-    def _flush_locked(self) -> None:
-        if self._buf:
-            text = "".join(self._buf)
-            self._buf.clear()
-            self._size = 0
-            # Chunks of <= STREAM_CHUNK_CHARS keep every event far below the
-            # message size limit (at most 4 bytes per character).
-            for start in range(0, len(text), STREAM_CHUNK_CHARS):
-                self._worker.writer.send({"type": "event", "event": "stream", "name": self.name,
-                                          "text": text[start:start + STREAM_CHUNK_CHARS],
-                                          "execId": self._exec_id})
-        self._last = time.monotonic()
-
     def flush(self) -> None:
-        with self._lock:
-            self._flush_locked()
+        self._worker.outbuf.soft_flush()
 
     def writable(self) -> bool:
         return True
@@ -182,7 +146,10 @@ class CaptureStream:
         return False
 
     def isatty(self) -> bool:
-        return False
+        # The Output tab is a terminal (webview/terminal.ts): Keras, tqdm and
+        # rich then redraw progress in place instead of writing a new line
+        # per update. fileno() still raises, so widths fall back to 80.
+        return True
 
     # -- TextIOWrapper compatibility: these streams also serve as
     # sys.__stdout__/__stderr__, which libraries treat as real text files.
@@ -304,6 +271,7 @@ class Worker:
     def __init__(self, proto_in: BinaryIO, proto_out: BinaryIO) -> None:
         self.proto_in = proto_in
         self.writer = Writer(proto_out)
+        self.outbuf = outbuf.OutputBuffer(self.writer.send)
         self.session = secrets.token_hex(8)
         self.queue: collections.deque[Task] = collections.deque()
         self.cond = threading.Condition()
@@ -316,12 +284,14 @@ class Worker:
         self.thread_owners: weakref.WeakKeyDictionary[threading.Thread, tuple[int, Any]] = \
             weakref.WeakKeyDictionary()
         self.execution_count = 0
-        self.output_bytes = 0
-        self.output_truncated = False
         self.user = executor.make_user_module()
         self.ns: dict[str, Any] = self.user.__dict__
         self.page_cache = dataframe.PageCache()
-        self.ml_hashes: set[str] = set()
+        # code hash -> seconds its last successful training run took
+        self.ml_hashes: dict[str, float] = {}
+        self.defer_interrupt = False
+        self.deferred_interrupt = False
+        self._risk_cache: dict[int, tuple[object, tuple[str, str] | None]] = {}
         self.program_input = ProgramInput(None)
         # A slot excludes the free-name fingerprint, so changing an input
         # replaces (and releases) the prior snapshot instead of accumulating
@@ -364,6 +334,9 @@ class Worker:
 
         threading.Thread.start = start  # type: ignore[method-assign]
         sys.stdin = _StdinProxy(self)  # type: ignore[assignment]
+        warnfold.install()
+        magics.install_display(executor.show_value_figure, lambda obj: executor.describe_result(obj)["repr"])
+        self.ns[magics.TIMEIT_NAME] = magics.timeit
         import builtins
         # input() reads the program input (<script>.in sent by the host).
         builtins.input = lambda prompt="": self.program_input.input(prompt)  # type: ignore[assignment]
@@ -415,7 +388,7 @@ class Worker:
         # stdin EOF: the host is gone. Exit without running user atexit hooks
         # that could block forever.
         self.writer.close(0.5)
-        os._exit(0)
+        children.exit_process(0)
 
     def control(self, msg: dict[str, Any]) -> None:
         mtype = msg["type"]
@@ -450,7 +423,7 @@ class Worker:
             self.shutting_down = True
             self.respond(msg["id"], {"bye": True})
             self.writer.close(1.0)
-            os._exit(0)
+            children.exit_process(0)
 
     def interrupt_current(self, target: Any, reason: str) -> bool:
         with self.cur_lock:
@@ -459,7 +432,10 @@ class Worker:
                 return False
             if self.interrupt_reason is None:
                 self.interrupt_reason = reason
-                _thread.interrupt_main()
+                if self.defer_interrupt:
+                    self.deferred_interrupt = True  # raised after the import
+                else:
+                    _thread.interrupt_main()
             return True
 
     # -- main thread -------------------------------------------------------
@@ -467,9 +443,8 @@ class Worker:
         # Writes are batched; without this, text printed by a background
         # thread after its execution ended would wait for the next execution.
         while True:
-            time.sleep(STREAM_FLUSH_SECONDS * 2)
-            for s in (self.capture_out, self.capture_err):
-                s.flush()
+            time.sleep(outbuf.FLUSH_SECONDS)
+            self.outbuf.soft_flush()
 
     def serve_forever(self) -> None:
         threading.Thread(target=self.reader, name="pylive-reader", daemon=True).start()
@@ -495,6 +470,8 @@ class Worker:
         with self.cur_lock:
             self.current = task
             self.interrupt_reason = None
+            self.defer_interrupt = False
+            self.deferred_interrupt = False
             self.timeout_generation += 1
         timer: threading.Timer | None = None
         budget = self._deadline_for(task)
@@ -519,6 +496,10 @@ class Worker:
                 reply = _error(task.id, "bad_request", str(exc))
             except Exception as exc:  # noqa: BLE001 - inspection bug must not kill the worker
                 reply = _error(task.id, "internal_error", f"{type(exc).__name__}: {exc}"[:1000])
+            except (SystemExit, GeneratorExit) as exc:
+                # Raised by user code that inspection reached (a property);
+                # ending the process here would lose the whole namespace.
+                reply = _error(task.id, "internal_error", type(exc).__name__)
             self._finish_task(timer)
             _drain_pending_interrupt()
         except KeyboardInterrupt:
@@ -544,7 +525,7 @@ class Worker:
             reply = {"type": "response", "id": task.id, "ok": True, "result": {
                 "status": "error", "executionCount": self.execution_count,
                 "error": {"ename": "KeyboardInterrupt", "evalue": msg, "traceback": f"KeyboardInterrupt: {msg}\n",
-                          "frames": [], "userFrame": None}, "figures": [],
+                          "frames": [], "userFrame": None}, "figures": _figures_after_interrupt(),
                 "skippedLoads": list(self.current_skipped_loads),
                 "loadedNow": list(self.current_loaded_now),
                 "loadCache": len(self.load_cache),
@@ -565,12 +546,12 @@ class Worker:
         return _num(p.get("timeoutMs"), 20000, 100, 600_000) / 1000
 
     def _flush_streams(self) -> None:
-        # Flush our own streams even if user code replaced sys.stdout.
-        for s in (self.capture_out, self.capture_err):
-            try:
-                s.flush()
-            except KeyboardInterrupt:
-                pass
+        # Flush our own buffer even if user code replaced sys.stdout; the end
+        # of a run that went over budget is sent now.
+        try:
+            self.outbuf.finish()
+        except KeyboardInterrupt:
+            pass
 
     def _arm_live_timeout(self, seconds: float) -> threading.Timer:
         with self.cur_lock:
@@ -585,7 +566,10 @@ class Worker:
                         or current.id != target or self.interrupt_reason is not None:
                     return
                 self.interrupt_reason = "timeout"
-                _thread.interrupt_main()
+                if self.defer_interrupt:
+                    self.deferred_interrupt = True  # raised after the import
+                else:
+                    _thread.interrupt_main()
 
         timer = threading.Timer(seconds, fire)
         timer.daemon = True
@@ -632,8 +616,11 @@ class Worker:
         self.exec_seq += 1
         stdin = self._stdin_param(p)
         self.program_input = ProgramInput(stdin)
-        self.output_bytes = 0
-        self.output_truncated = False
+        self.outbuf.flush()  # earlier background output keeps its own budget
+        self.outbuf.reset()
+        warnfold.start_run(self.ns)
+        executor.reset_figures()
+        self._prepare_plotly()
         self.current_skipped_loads = []
         self.current_loaded_now = []
 
@@ -641,23 +628,62 @@ class Worker:
         if mode == "live":
             live_budget = _num(p.get("timeoutMs"), 5000, 100, 600_000) / 1000
 
-        analysis = safety.analyze_source(code)
+        source_code = code
+        try:
+            code, magic_notes = magics.rewrite(code)
+        except magics.MagicError as exc:
+            err = SyntaxError(str(exc), (filename, exc.line + line_offset, 1, None))
+            return {"status": "error", "error": executor.format_syntax_error(err),
+                    "executionCount": self.execution_count, "figures": [],
+                    "skippedLoads": [], "loadedNow": [], "loadCache": len(self.load_cache)}
+        analysis = safety.analyze_source(code, self._cheap_preprocessors(), self._risky_calls(),
+                                         self._torch_modules())
+        _add_file_lines(analysis, line_offset)
         statement_analysis = analysis.get("statements", [])
         live_ok = analysis["liveSafe"] or (stdin is not None and analysis.get("liveSafeWithInput"))
+        stop_index: int | None = None
+        stopped_at = None
         if mode == "live" and not live_ok:
-            return {"status": "blocked", "analysis": analysis,
-                    "executionCount": self.execution_count,
-                    "skippedLoads": [], "loadedNow": [],
-                    "loadCache": len(self.load_cache)}
+            # Run the safe beginning of the cell (load, preprocess, explore)
+            # and stop before the first statement that trains or writes:
+            # blocking the whole cell made Live useless on ML files.
+            allowed = safety.LIVE_OK_WITH_INPUT if stdin is not None else safety.LIVE_OK
+            whole = analysis.get("syntaxError") or any(f["category"] == "marker" for f in analysis["findings"])
+            stop_index = None if whole else _first_unsafe(statement_analysis, allowed)
+            if stop_index is not None:
+                stopped_at = _stop_info(statement_analysis[stop_index], allowed)
+                reset = _first_state_reset(ast.parse(code).body, stop_index, self.ns)
+                if reset is not None:
+                    stop_index, name = reset
+                    stopped_at = {
+                        "line": int(statement_analysis[stop_index]["line"]) + line_offset,
+                        "category": stopped_at["category"],
+                        "message": f"re-running this would reset '{name}', which line "
+                                   f"{stopped_at['line']} uses ({stopped_at['message']})",
+                    }
+            if whole or stop_index is None or stop_index == 0:
+                blocked = {"status": "blocked", "analysis": analysis,
+                           "executionCount": self.execution_count,
+                           "skippedLoads": [], "loadedNow": [],
+                           "loadCache": len(self.load_cache)}
+                if stopped_at is not None:
+                    blocked["stoppedAt"] = stopped_at
+                return blocked
         code_hash = hashlib.sha256(code.encode("utf-8", "surrogatepass")).hexdigest()
-        if mode == "manual" and analysis.get("training") and code_hash in self.ml_hashes \
-                and not p.get("force"):
+        # Ask before repeating training only when the last run took long
+        # enough to matter (instant fits asked every time).
+        confirm_after = _num(p.get("confirmAfterMs"), 0, 0, 86_400_000) / 1000
+        last = self.ml_hashes.get(code_hash)
+        if mode == "manual" and analysis.get("training") and last is not None \
+                and last >= confirm_after and not p.get("force"):
             return {"status": "needs_confirmation", "analysis": analysis,
                     "executionCount": self.execution_count,
+                    "lastElapsedMs": round(last * 1000, 2),
                     "skippedLoads": [], "loadedNow": [],
                     "loadCache": len(self.load_cache)}
+        self._set_script_file(filename)
 
-        executor.register_source(filename, code, line_offset)
+        executor.register_source(filename, source_code, line_offset)
         try:
             statements = executor.compile_statements(code, filename, line_offset)
         except SyntaxError as exc:
@@ -668,6 +694,9 @@ class Worker:
 
         if len(statement_analysis) != len(statements):
             raise RuntimeError("safety and compiler statement counts differ")
+        if stop_index is not None:
+            statements = statements[:stop_index]
+            statement_analysis = statement_analysis[:stop_index]
 
         self.execution_count += 1
         self.page_cache.clear()
@@ -675,6 +704,7 @@ class Worker:
         value: Any = None
         error = None
         remaining = live_budget
+        import_seconds = 0.0  # imports do not make training "slow"
         try:
             for statement, statement_info in zip(statements, statement_analysis):
                 is_load = bool(statement_info["load"])  # type: ignore[index]
@@ -706,7 +736,12 @@ class Worker:
 
                 timer = None
                 statement_started = time.perf_counter()
-                if mode == "live" and not is_load:
+                is_import = isinstance(statement.node, (ast.Import, ast.ImportFrom))
+                untearable = is_import and _imports_untearable(statement.node)
+                if mode == "live" and not is_load and is_import:
+                    assert remaining is not None
+                    timer = self._arm_live_timeout(max(remaining, LIVE_IMPORT_SECONDS))
+                elif mode == "live" and not is_load:
                     assert remaining is not None
                     if remaining <= 0:
                         with self.cur_lock:
@@ -718,11 +753,22 @@ class Worker:
                 # first statement and printed by a later one in the same run.
                 executor.apply_pandas_display()
                 try:
+                    if untearable:
+                        with self.cur_lock:
+                            self.defer_interrupt = True
                     if statement.is_expression:
                         value = eval(statement.code, self.ns)
                     else:
                         exec(statement.code, self.ns)
+                    if untearable:
+                        self._end_untearable()
+                    if is_import:
+                        self._prepare_plotly()
                 except BaseException:
+                    if untearable:
+                        with self.cur_lock:
+                            self.defer_interrupt = False
+                            self.deferred_interrupt = False
                     if load_slot is not None:
                         self.load_cache.pop(load_slot, None)
                     raise
@@ -738,10 +784,13 @@ class Worker:
                         # A no-binding, non-final expression may have visible
                         # side effects, so it deliberately remains uncached.
                 finally:
+                    if is_import:
+                        import_seconds += time.perf_counter() - statement_started
                     if timer is not None:
                         self._disarm_live_timeout(timer)
                         assert remaining is not None
-                        remaining -= time.perf_counter() - statement_started
+                        if not is_import:
+                            remaining -= time.perf_counter() - statement_started
         except KeyboardInterrupt:
             raise
         except SystemExit as exc:
@@ -751,12 +800,22 @@ class Worker:
         except BaseException as exc:  # noqa: BLE001
             error = executor.format_exception(exc, {filename})
         elapsed = time.perf_counter() - started
+        if value is not None and error is None:
+            # A Figure is drawn, plt.plot(...)'s Line2D list is noise, and a
+            # trailing ';' hides the value, as in notebooks.
+            if executor.show_value_figure(value) or executor.is_plot_artist(value) \
+                    or (statements and _ends_with_semicolon(code, statements[-1], line_offset)):
+                value = None
+        folded = warnfold.summary()
+        if folded:
+            self.capture_err.write(folded)
+        self.outbuf.flush()
         result: dict[str, Any] = {
             "status": "error" if error else "ok",
             "executionCount": self.execution_count,
             "elapsedMs": round(elapsed * 1000, 2),
             "figures": executor.capture_figures(),
-            "outputTruncated": self.output_truncated,
+            "outputTruncated": self.outbuf.truncated,
             "skippedLoads": list(self.current_skipped_loads),
             "loadedNow": list(self.current_loaded_now),
             "loadCache": len(self.load_cache),
@@ -766,11 +825,139 @@ class Worker:
         elif value is not None:
             self.ns["_"] = value
             result["value"] = executor.describe_result(value)
-        if analysis.get("training") and not error:
-            self.ml_hashes.add(code_hash)
+        if analysis.get("training") and not error and mode == "manual":
+            self.ml_hashes[code_hash] = max(0.0, elapsed - import_seconds)
+        if stopped_at is not None:
+            result["stoppedAt"] = stopped_at
+        if magic_notes:
+            result["notes"] = magic_notes
         if analysis["findings"]:
             result["analysis"] = analysis
         return result
+
+    def _end_untearable(self) -> None:
+        with self.cur_lock:
+            self.defer_interrupt = False
+            pending = self.deferred_interrupt
+            self.deferred_interrupt = False
+        if pending:
+            raise KeyboardInterrupt
+
+    def _set_script_file(self, filename: str) -> None:
+        """__file__ of a saved script, as `python script.py` has it.
+
+        Windows starts DataLoader / multiprocessing workers by re-importing
+        the main script from __main__.__file__; without it a Dataset class
+        could not be found in the worker. `Path(__file__).parent` works too.
+        """
+        if filename.endswith(".py") and os.path.isabs(filename) and os.path.isfile(filename):
+            self.ns["__file__"] = filename
+        else:
+            cur = self.ns.get("__file__")
+            if type(cur) is str and not os.path.isfile(cur):
+                self.ns.pop("__file__", None)
+
+    def _risky_calls(self) -> dict[str, tuple[str, str]]:
+        """Helpers and classes defined in earlier runs whose call trains or writes.
+
+        Read from code objects only (safety.code_risk), nothing is called:
+        user functions, also wrapped ones (@tf.function, functools.wraps),
+        user classes ("Trainer" when __init__ trains, "Trainer.run") and
+        their instances ("trainer.run"). A helper that calls a risky helper
+        is risky too.
+        """
+        out: dict[str, tuple[str, str]] = {}
+        plain: dict[str, list[Any]] = {}  # user functions without a risk of their own
+        if len(self._risk_cache) > 4096:
+            self._risk_cache.clear()
+        for count, (name, value) in enumerate(list(self.ns.items())):
+            if count > 5000:
+                break
+            if type(name) is not str or name.startswith("__"):
+                continue
+            t = type(value)
+            codes = _function_codes(value)
+            if codes:
+                risk = next((r for r in map(self._code_risk, codes) if r is not None), None)
+                if risk is not None:
+                    out[name] = risk
+                elif _is_user_code(codes[0]):
+                    plain[name] = codes
+            elif heap.is_class(value):
+                if type_module(value) in heap.USER_MODULES:
+                    self._member_risks(name, value, out, "__init__")
+            elif type_module(t) in heap.USER_MODULES:
+                self._member_risks(name, t, out, "__call__")
+        for _ in range(4):
+            grew = False
+            for name, codes in list(plain.items()):
+                used: set[str] = set()
+                for c in codes:
+                    used |= safety.code_names(c)
+                called = sorted(used & out.keys())
+                if called:
+                    out[name] = (out[called[0]][0], f"inside, '{called[0]}()': {out[called[0]][1]}")
+                    del plain[name]
+                    grew = True
+            if not grew:
+                break
+        return out
+
+    def _member_risks(self, name: str, klass: type, out: dict[str, tuple[str, str]], call: str) -> None:
+        """Risky methods of a user class as "name.method"; `call` is the
+        method that calling `name` itself runs (__init__ for a class)."""
+        seen: set[str] = set()
+        for k in heap.class_mro(klass):
+            if type_module(k) not in heap.USER_MODULES:
+                continue
+            for attr, fn in list(heap.class_ns(k).items()):
+                if type(attr) is not str or attr in seen:
+                    continue
+                seen.add(attr)  # the most derived definition wins
+                if type(fn) in (staticmethod, classmethod):
+                    fn = fn.__func__
+                if type(fn) is types.FunctionType:
+                    risk = self._code_risk(fn.__code__)
+                    if risk is not None:
+                        out[f"{name}.{attr}"] = risk
+        if f"{name}.{call}" in out:
+            out[name] = out[f"{name}.{call}"]
+
+    def _torch_modules(self) -> frozenset[str]:
+        """Names bound to a torch.nn.Module: their .train() trains nothing."""
+        if "torch" not in sys.modules:
+            return frozenset()
+        out = set()
+        for count, (name, value) in enumerate(list(self.ns.items())):
+            if count > 5000:
+                break
+            if type(name) is not str:
+                continue
+            for k in heap.class_mro(type(value)):
+                if type_qualname(k) == "Module" and type_module(k) == "torch.nn.modules.module":
+                    out.add(name)
+                    break
+        return frozenset(out)
+
+    def _prepare_plotly(self) -> None:
+        if "plotly" in sys.modules:
+            executor.prepare_plotly(_plotly_dir())
+
+    def _code_risk(self, code: Any) -> tuple[str, str] | None:
+        hit = self._risk_cache.get(id(code))
+        if hit is not None and hit[0] is code:
+            return hit[1]
+        risk = safety.code_risk(code) if _is_user_code(code) else None
+        self._risk_cache[id(code)] = (code, risk)
+        return risk
+
+    def _cheap_preprocessors(self) -> frozenset[str]:
+        """Names bound to scikit-learn scalers/encoders (exact library types)."""
+        out = set()
+        for name, value in list(self.ns.items()):
+            if type(name) is str and safety_type_is_cheap(type(value)):
+                out.add(name)
+        return frozenset(out)
 
     def h_trace(self, p: dict[str, Any]) -> dict[str, Any]:
         code = _str(p.get("code"), "code", 200_000)
@@ -786,7 +973,7 @@ class Worker:
                 return {"status": "blocked", "analysis": analysis}
         result = tracer.run_trace(
             code,
-            max_steps=int(_num(p.get("maxSteps"), 1000, 10, 20000)),
+            max_steps=int(_num(p.get("maxSteps"), 5000, 10, 50000)),
             max_bytes=int(_num(p.get("maxBytes"), 6_000_000, 10_000, 7_000_000)),
             max_seconds=_num(p.get("timeoutMs"), 15000, 100, 600_000) / 1000,
             stdin=stdin,
@@ -800,7 +987,8 @@ class Worker:
         return None if stdin is None else _str(stdin, "stdin", 1_100_000)
 
     def h_analyze(self, p: dict[str, Any]) -> dict[str, Any]:
-        return safety.analyze_source(_str(p.get("code"), "code", 2_000_000))
+        return safety.analyze_source(_str(p.get("code"), "code", 2_000_000), self._cheap_preprocessors(),
+                                     self._risky_calls(), self._torch_modules())
 
     def h_variables_list(self, p: dict[str, Any]) -> dict[str, Any]:
         out = inspector.list_variables(self.ns)
@@ -816,6 +1004,25 @@ class Worker:
             max_items=int(_num(p.get("maxItems"), 100, 1, 1000)))
         out["session"] = self.session
         out["revision"] = self.execution_count
+        return out
+
+    def h_variables_image(self, p: dict[str, Any]) -> dict[str, Any]:
+        value = self._lookup(p)
+        try:
+            out = images.preview(value, start=int(_num(p.get("start"), 0, 0, 10**12)),
+                                 max_images=int(_num(p.get("count"), 16, 1, images.MAX_IMAGES)))
+        except images.NotAnImage as exc:
+            raise RequestError("not_an_image", str(exc)) from None
+        out.update(name=p["name"], session=self.session, revision=self.execution_count)
+        return out
+
+    def h_variables_series(self, p: dict[str, Any]) -> dict[str, Any]:
+        value = self._lookup(p)
+        try:
+            out = series.chart(value, int(_num(p.get("maxPoints"), series.DEFAULT_POINTS, 20, 5000)))
+        except series.NotASeries as exc:
+            raise RequestError("not_a_series", str(exc)) from None
+        out.update(name=p["name"], session=self.session, revision=self.execution_count)
         return out
 
     def h_dataframe_metadata(self, p: dict[str, Any]) -> dict[str, Any]:
@@ -849,7 +1056,8 @@ class Worker:
 
     def h_dataframe_column(self, p: dict[str, Any]) -> dict[str, Any]:
         out = dataframe.column_detail(self._lookup(p), p.get("column"))  # type: ignore[arg-type]
-        out.update(name=p["name"], revision=self.execution_count)
+        # "name" is the column's label; the frame goes under its own key.
+        out.update(frame=p["name"], revision=self.execution_count)
         return out
 
     # -- responses ---------------------------------------------------------
@@ -869,6 +1077,226 @@ def _target_names(target: ast.expr) -> set[str]:
             names.update(_target_names(item))
         return names
     return set()
+
+
+_PLOTLY_DIR: str | None = None
+_PLOTLY_PREFIX = "vrun-figures-"
+_STALE_FIGURE_SECONDS = 2 * 86400
+
+
+def _plotly_dir() -> str:
+    """This kernel's own figure folder (mkdtemp: unique, 0700 on POSIX).
+
+    A shared, predictable folder let another user plant files or symlinks.
+    """
+    global _PLOTLY_DIR
+    if _PLOTLY_DIR is None or not os.path.isdir(_PLOTLY_DIR):
+        _PLOTLY_DIR = tempfile.mkdtemp(prefix=_PLOTLY_PREFIX)
+    return _PLOTLY_DIR
+
+
+def _remove_stale_figure_dirs() -> None:
+    """Folders of kernels that ended days ago (a killed kernel cannot clean up)."""
+    import shutil
+    import stat
+    root = tempfile.gettempdir()
+    now = time.time()
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return
+    for entry in entries[:10000]:
+        if not entry.name.startswith(_PLOTLY_PREFIX):
+            continue
+        try:
+            st = entry.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(st.st_mode) or now - st.st_mtime < _STALE_FIGURE_SECONDS:
+                continue
+            if hasattr(os, "getuid") and st.st_uid != os.getuid():
+                continue
+            shutil.rmtree(entry.path, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def _figures_after_interrupt() -> list[dict[str, Any]]:
+    # Plots drawn before the interrupt belong to this run (not the next one).
+    try:
+        return executor.capture_figures()
+    except BaseException:  # noqa: BLE001 - a second interrupt or a drawing error
+        return []
+
+
+def _ends_with_semicolon(code: str, statement: Any, line_offset: int) -> bool:
+    node = statement.node
+    if not statement.is_expression or getattr(node, "end_lineno", None) is None:
+        return False
+    lines = code.splitlines()
+    i = node.end_lineno - line_offset - 1
+    if not 0 <= i < len(lines):
+        return False
+    rest = lines[i].encode("utf-8", "surrogatepass")[node.end_col_offset or 0:].decode("utf-8", "ignore")
+    return rest.lstrip().startswith(";")
+
+
+_LIBRARY_DIRS = tuple(os.path.normcase(os.path.abspath(d)) for d in {sys.prefix, sys.base_prefix, sys.exec_prefix})
+
+
+def _is_user_code(code: Any) -> bool:
+    path = getattr(code, "co_filename", "")
+    if type(path) is not str or not path or path.startswith("<frozen"):
+        return False
+    if path.startswith("<"):
+        return True  # cells ("<pylive-cell>", untitled documents)
+    norm = os.path.normcase(os.path.abspath(path))
+    return "site-packages" not in norm and not norm.startswith(_LIBRARY_DIRS)
+
+
+def _imports_untearable(node: ast.stmt) -> bool:
+    if isinstance(node, ast.Import):
+        roots = {a.name.split(".")[0] for a in node.names}
+    elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+        roots = {node.module.split(".")[0]}
+    else:
+        return False
+    return any(r in UNTEARABLE_IMPORTS and r not in sys.modules for r in roots)
+
+
+def _add_file_lines(analysis: dict[str, Any], line_offset: int) -> None:
+    """Findings carry the document line too (cells start at line_offset)."""
+    for f in analysis.get("findings", []):
+        f["fileLine"] = int(f.get("line") or 0) + line_offset
+    for st in analysis.get("statements", []):
+        for f in st.get("findings", []):
+            f["fileLine"] = int(f.get("line") or 0) + line_offset
+
+
+def _first_unsafe(statements: list[dict[str, Any]], allowed: tuple[str, ...]) -> int | None:
+    for i, st in enumerate(statements):
+        if any(f["category"] not in allowed for f in st["findings"]):
+            return i
+    return None
+
+
+def _stop_info(statement: dict[str, Any], allowed: tuple[str, ...]) -> dict[str, Any]:
+    f = next(f for f in statement["findings"] if f["category"] not in allowed)
+    return {"line": f["fileLine"], "category": f["category"], "message": f["message"]}
+
+
+def _function_codes(value: object) -> list[Any]:
+    """Code of a plain function and of the function it wraps.
+
+    functools.wraps keeps the original in the wrapper's __dict__, tf.function
+    in its instance dict; both are read without calling anything.
+    """
+    if type(value) is types.FunctionType:
+        codes = [value.__code__]
+        wrapped = value.__dict__.get("__wrapped__")
+    else:
+        d = heap.instance_dict(value)
+        if d is None:
+            return []
+        codes = []
+        wrapped = d.get("__wrapped__")
+    if type(wrapped) is types.FunctionType:
+        codes.append(wrapped.__code__)
+    return codes
+
+
+_PLAIN_DATA = (int, float, complex, bool, str, bytes, type(None), range, list, dict, set, frozenset,
+               types.ModuleType, types.FunctionType)
+_MUTATING_METHODS = {
+    "append", "extend", "insert", "pop", "remove", "clear", "update", "add", "discard",
+    "setdefault", "popitem", "sort", "reverse", "appendleft", "extendleft", "popleft",
+    "fill", "resize", "put", "put_nowait",
+}
+
+
+def _is_plain_data(value: object) -> bool:
+    """Values that re-running their assignment recreates as they were
+    (data, arrays, frames). Models, optimizers and tensors are state that
+    training built."""
+    t = type(value)
+    if t in _PLAIN_DATA or heap.is_class(value):
+        return True
+    if t is tuple:
+        return len(value) <= 100 and all(_is_plain_data(v) for v in value)  # type: ignore[arg-type]
+    module = type_module(t)
+    return module in ("numpy", "collections") or module.startswith(("pandas.", "scipy.sparse"))
+
+
+def _base_name(node: ast.expr) -> str | None:
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _mutated_names(statements: list[ast.stmt]) -> set[str]:
+    """Names whose value the statements change in place: `losses.append(x)`,
+    `history["loss"] += [x]`, `count += 1`, `w[0] = 1`."""
+    names: set[str] = set()
+    for s in statements:
+        for node in ast.walk(s):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr in _MUTATING_METHODS:
+                base = _base_name(node.func.value)
+            elif isinstance(node, ast.AugAssign):
+                base = _base_name(node.target)
+            elif isinstance(node, (ast.Assign, ast.Delete)):
+                for t in node.targets:
+                    if isinstance(t, (ast.Attribute, ast.Subscript)):
+                        b = _base_name(t)
+                        if b is not None:
+                            names.add(b)
+                continue
+            else:
+                continue
+            if base is not None:
+                names.add(base)
+    return names
+
+
+def _rebound_names(statement: ast.stmt) -> set[str]:
+    """Names a statement assigns, outside function and class bodies."""
+    names: set[str] = set()
+    stack: list[ast.AST] = [statement]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                names |= _target_names(target)
+        elif isinstance(node, (ast.AnnAssign, ast.For, ast.AsyncFor, ast.NamedExpr)):
+            names |= _target_names(node.target)
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            names |= _target_names(node.optional_vars)
+        stack.extend(ast.iter_child_nodes(node))
+    return names
+
+
+def _first_state_reset(body: list[ast.stmt], stop: int, ns: dict[str, Any]) -> tuple[int, str] | None:
+    """First statement before `stop` that would replace an object the
+    skipped statements use: `model = LogisticRegression()` before
+    `model.fit(...)`. Running it live threw the trained model away."""
+    if stop > len(body):
+        return None
+    skipped = body[stop:]
+    used = {n.id for s in skipped for n in ast.walk(s)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    mutated = _mutated_names(skipped)
+    used |= mutated  # `count += 1` reads count too
+    for i in range(stop):
+        for name in sorted(_rebound_names(body[i]) & used):
+            # Data is recreated as it was, unless the skipped loop fills it
+            # (`losses = []` before `losses.append(loss)`).
+            if name in ns and (name in mutated or not _is_plain_data(ns[name])):
+                return i, name
+    return None
+
+
+def safety_type_is_cheap(t: type) -> bool:
+    return type_module(t).startswith("sklearn.") and type_qualname(t) in safety.CHEAP_PREPROCESSORS
 
 
 def _bound_names(statement: ast.stmt) -> set[str]:
@@ -1088,7 +1516,53 @@ def _open_protocol_streams() -> tuple[BinaryIO, BinaryIO]:
     return os.fdopen(in_fd, "rb"), os.fdopen(out_fd, "wb", buffering=0)
 
 
+_VRUN_BACKEND = "module://pylive_kernel.mpl_backend"
+
+
+class _MatplotlibBackendHook:
+    """Points matplotlib at the vrun backend when this process imports it.
+
+    MPLBACKEND itself stays "Agg": subprocesses and multiprocessing workers
+    inherit the environment and cannot import pylive_kernel, so a module://
+    value there made every plot in a child crash.
+    """
+
+    def find_spec(self, name: str, path: Any = None, target: Any = None) -> Any:
+        if name != "matplotlib":
+            return None
+        spec = None
+        for finder in list(sys.meta_path):
+            find = getattr(finder, "find_spec", None) if finder is not self else None
+            if find is None:
+                continue
+            spec = find(name, path, target)
+            if spec is not None:
+                break
+        loader = getattr(spec, "loader", None)
+        exec_module = getattr(loader, "exec_module", None)
+        if exec_module is None:
+            return spec
+
+        def exec_and_point(module: Any) -> None:
+            exec_module(module)
+            try:
+                rc = module.rcParams
+                current = dict.get(rc, "backend")  # no backend resolution
+                if type(current) is str and current.lower() == "agg":
+                    rc["backend"] = _VRUN_BACKEND
+            except Exception:  # noqa: BLE001 - plots then use plain Agg
+                pass
+
+        loader.exec_module = exec_and_point  # type: ignore[union-attr]
+        return spec
+
+
 def main() -> None:
+    children.contain_children()
+    if os.environ.get("MPLBACKEND", "Agg").lower() in ("agg", ""):
+        os.environ["MPLBACKEND"] = "Agg"
+        sys.meta_path.insert(0, _MatplotlibBackendHook())
+    _remove_stale_figure_dirs()
     proto_in, proto_out = _open_protocol_streams()
     worker = Worker(proto_in, proto_out)
     worker.install_streams()

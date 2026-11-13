@@ -10,6 +10,7 @@ from __future__ import annotations
 import decimal
 from typing import Any
 
+from .heap import in_package, is_torch_tensor
 from .serialize import encode_label, encode_scalar, type_module, type_qualname
 
 MAX_PAGE_ROWS = 500
@@ -22,10 +23,44 @@ class BadRequest(ValueError):
     pass
 
 
-def _frame(value: Any) -> Any:
-    """Return a DataFrame view for DataFrame or Series values."""
+def table_source(value: Any) -> Any:
+    """A 1-D / 2-D NumPy array (or CPU tensor) the viewer can page, else None.
+
+    X_train, predict_proba output and confusion matrices are arrays; they get
+    paging, sort, filter and statistics through a zero-copy DataFrame view.
+    Only when pandas is already loaded (it is never imported here).
+    """
+    import sys
+
+    if "pandas" not in sys.modules:
+        return None
     t = type(value)
-    if not type_module(t).startswith("pandas"):
+    if is_torch_tensor(t):
+        if value.device.type != "cpu" or value.is_complex() or value.layout != sys.modules["torch"].strided \
+                or value.dim() not in (1, 2):
+            return None
+        try:
+            value = value.detach().numpy()  # shares memory with the tensor
+        except (TypeError, RuntimeError):
+            return None  # bfloat16 / float8 have no NumPy dtype
+        t = type(value)
+    mod, name = type_module(t), type_qualname(t)
+    if mod == "numpy" and name == "ndarray" and value.ndim in (1, 2) and value.dtype.fields is None \
+            and value.size > 0:
+        return value
+    return None
+
+
+def _frame(value: Any) -> Any:
+    """Return a DataFrame view for DataFrame or Series values (or arrays)."""
+    t = type(value)
+    pandas_type = in_package(type_module(t), ("pandas",))
+    arr = table_source(value) if not pandas_type else None
+    if arr is not None:
+        import pandas as pd
+
+        return pd.DataFrame(arr if arr.ndim == 2 else arr.reshape(-1, 1), copy=False)
+    if not pandas_type:
         raise BadRequest("variable is not a pandas DataFrame or Series")
     if type_qualname(t) == "Series":
         return value.to_frame(name=value.name if value.name is not None else "value")

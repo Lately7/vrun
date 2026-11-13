@@ -47,9 +47,14 @@ export function allNumeric(items: Encoded[]): boolean {
 /** "Nice" tick values covering [lo, hi]. */
 export function niceTicks(lo: number, hi: number, maxTicks = 10): number[] {
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [];
-  if (lo === hi) {
-    lo -= 1;
-    hi += 1;
+  if (hi < lo) [lo, hi] = [hi, lo];
+  // Values that differ only by rounding (0.3 vs 0.1 + 0.2) count as equal:
+  // a step below the float resolution never advanced and looped forever.
+  const scale = Math.max(Math.abs(lo), Math.abs(hi));
+  if (hi - lo <= scale * 1e-9) {
+    const pad = scale === 0 ? 1 : scale * 0.1;
+    lo -= pad;
+    hi += pad;
   }
   const span = hi - lo;
   const raw = span / Math.max(1, maxTicks);
@@ -58,7 +63,14 @@ export function niceTicks(lo: number, hi: number, maxTicks = 10): number[] {
   const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
   const start = Math.floor(lo / step) * step;
   const ticks: number[] = [];
-  for (let t = start; t <= hi + step * 0.5; t += step) ticks.push(Number(t.toPrecision(12)));
+  // start + k * step (not t += step) cannot get stuck; the cap is a backstop.
+  // The last tick is the first one at or above hi: charts take their range
+  // from the ticks, and stopping below hi cut off the highest points.
+  for (let k = 0; k <= 4 * maxTicks + 4; k++) {
+    const t = start + k * step;
+    ticks.push(Number(t.toPrecision(12)));
+    if (t >= hi - step * 1e-9) break;
+  }
   return ticks;
 }
 
@@ -108,6 +120,64 @@ export function refLabels(vars: Var[]): Map<number, string[]> {
 
 export function sameEncoded(a: Encoded | undefined, b: Encoded | undefined): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** What itemKeys remembers of the last drawing of an array. */
+export interface KeyMemo {
+  sig: string[];
+  keys: string[];
+}
+
+/**
+ * Animation keys (data-anim) for the items of an array, relative to the
+ * last drawing of the same array. When the step only moved values around
+ * (a swap, a sort pass: the same multiset) each value keeps its key and
+ * the animator slides it to its new place; otherwise keys stay with their
+ * positions, so an in-place change flashes. Carrying keys over (instead of
+ * switching between value keys and index keys) keeps a no-op step after
+ * an in-place change from re-fading the whole array.
+ */
+export function itemKeys(items: Encoded[], last: KeyMemo | undefined): KeyMemo {
+  const sig = items.map((x) => JSON.stringify(x));
+  const keys: string[] = [];
+  const used = new Set<string>();
+  const fresh = (i: number) => {
+    let k = `i:${i}`;
+    for (let n = 1; used.has(k); n++) k = `i:${i}.${n}`;
+    return k;
+  };
+  if (last && last.sig.length === sig.length && sameMultiset(last.sig, sig)) {
+    const pool = new Map<string, string[]>();
+    last.sig.forEach((x, i) => {
+      const list = pool.get(x);
+      if (list) list.push(last.keys[i]);
+      else pool.set(x, [last.keys[i]]);
+    });
+    for (const x of sig) {
+      const k = pool.get(x)!.shift()!;
+      keys.push(k);
+      used.add(k);
+    }
+    return { sig, keys };
+  }
+  sig.forEach((_, i) => {
+    const old = last?.keys[i];
+    const k = old !== undefined && !used.has(old) ? old : fresh(i);
+    keys.push(k);
+    used.add(k);
+  });
+  return { sig, keys };
+}
+
+function sameMultiset(a: string[], b: string[]): boolean {
+  const count = new Map<string, number>();
+  for (const k of a) count.set(k, (count.get(k) ?? 0) + 1);
+  for (const k of b) {
+    const c = count.get(k);
+    if (!c) return false;
+    count.set(k, c - 1);
+  }
+  return true;
 }
 
 export function textWidth(t: string, px = 7): number {

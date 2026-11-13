@@ -31,6 +31,54 @@ def is_class(obj: object) -> bool:
 def is_ndarray(t: type) -> bool:
     return type_module(t) == "numpy" and type_qualname(t) == "ndarray"
 
+
+def in_package(module: str, packages: tuple[str, ...]) -> bool:
+    """module is one of packages or inside one: "torchutils" is not "torch"."""
+    return any(module == p or module.startswith(p + ".") for p in packages)
+
+
+_MODULE_DICT = types.ModuleType.__dict__["__dict__"]
+
+
+def library_class(module: str, name: str) -> Any:
+    """Class `name` of an already-imported module, or None.
+
+    Read from the module's own dict: a user object placed in sys.modules
+    never gets an attribute lookup it could intercept.
+    """
+    m = sys.modules.get(module)
+    if m is None or not issubclass(type(m), types.ModuleType):
+        return None
+    k = _MODULE_DICT.__get__(m, types.ModuleType).get(name)
+    return k if is_class(k) else None
+
+
+def is_torch_tensor(t: type) -> bool:
+    """Exactly torch.Tensor or torch.nn.Parameter.
+
+    Identity, not names: a learner's own autograd engine (torch_scratch.Tensor)
+    has the same qualname, and its properties would run.
+    """
+    if "torch" not in sys.modules:
+        return False
+    return t is library_class("torch", "Tensor") or t is library_class("torch.nn.parameter", "Parameter")
+
+
+def is_tf_tensor(t: type) -> bool:
+    if "tensorflow" not in sys.modules:
+        return False
+    return (t is library_class("tensorflow.python.framework.ops", "EagerTensor")
+            or t is library_class("tensorflow.python.ops.resource_variable_ops", "ResourceVariable"))
+
+
+def reads_as_dict(t: type) -> bool:
+    """dict subclasses whose items live in the dict itself.
+
+    scipy's dok_matrix subclasses dict but keeps its entries elsewhere, so
+    dict.items() would show a full matrix as empty.
+    """
+    return issubclass(t, dict) and not in_package(type_module(t), ("scipy.sparse",))
+
 _SEQ_KINDS: dict[type, str] = {
     list: "list",
     tuple: "tuple",
@@ -73,6 +121,9 @@ class HeapEncoder:
         self._ids = ids if ids is not None else {}
         self._keepalive = keepalive if keepalive is not None else []
         self._pending: list[tuple[int, object]] = []
+        # Ids referenced but not encoded (node cap): a delta-encoded trace
+        # must drop their older copies, or a stale node would show as current.
+        self.missing: set[int] = set()
 
     # -- public -----------------------------------------------------------
     def encode(self, value: object) -> Any:
@@ -92,7 +143,7 @@ class HeapEncoder:
 
     def _expandable(self, obj: object) -> bool:
         t = type(obj)
-        if t in _SEQ_KINDS or t in DICT_TYPES:
+        if t in _SEQ_KINDS or reads_as_dict(t):
             return True
         if type_module(t) in USER_MODULES and not is_class(obj):
             return True
@@ -113,6 +164,7 @@ class HeapEncoder:
         if key not in self.heap:
             if len(self.heap) >= self.max_nodes:
                 self.truncated = True
+                self.missing.add(oid)
                 return {"ref": oid, "missing": True}
             self.heap[key] = None  # reserve; filled by _drain
             self._pending.append((oid, v))
@@ -126,14 +178,19 @@ class HeapEncoder:
 
     def _node(self, obj: object) -> dict[str, Any]:
         t = type(obj)
-        if t in DICT_TYPES:
+        if reads_as_dict(t):
+            # Subclasses too (sklearn's Bunch from load_iris): read with
+            # dict's own C methods, so no overridden method ever runs.
             d: dict[Any, Any] = obj  # type: ignore[assignment]
             entries = []
             for i, (k, val) in enumerate(dict.items(d)):
                 if i >= self.max_items:
                     break
                 entries.append([self._value(k), self._value(val)])
-            return {"kind": "dict", "entries": entries, "len": len(d)}
+            node = {"kind": "dict", "entries": entries, "len": dict.__len__(d)}
+            if t not in DICT_TYPES:
+                node["type"] = type_qualname(t)
+            return node
         kind = _SEQ_KINDS.get(t)
         if kind is not None:
             seq = obj
@@ -277,6 +334,44 @@ def _slot_names(t: type) -> list[str]:
     return names
 
 
+def _number_kind(x: object) -> str | None:
+    """Kind ("int" / "float") of a number a training loop appends, else None.
+
+    Besides plain numbers: exact NumPy scalars (rmse.append(np.sqrt(mse)))
+    and one-element torch tensors (losses.append(loss)). Type checks are
+    exact and only the tensor's own C methods run.
+    """
+    t = type(x)
+    if t is float:
+        return "float"
+    if t is int:
+        return "int"
+    np = sys.modules.get("numpy")
+    if np is not None and type_module(t) == "numpy":
+        if issubclass(t, np.floating):
+            return "float"
+        if issubclass(t, np.integer):
+            return "int"
+        return None
+    if is_torch_tensor(t):
+        v: Any = x
+        if v.numel() != 1 or v.is_complex():
+            return None
+        return "float" if v.is_floating_point() else "int"
+    return None
+
+
+def is_number_sequence(v: object, min_len: int = 2) -> bool:
+    """An exact list/tuple of numbers, judged on its first 50 items."""
+    if type(v) not in (list, tuple):
+        return False
+    seq: Any = v
+    if len(seq) < min_len:
+        return False
+    kinds = [_number_kind(x) for x in seq[:50]]
+    return None not in kinds and "float" in kinds
+
+
 def viz_hint(obj: object) -> str | None:
     """Cheap guess of which visualizer view suits a value (no deep scans)."""
     t = type(obj)
@@ -296,9 +391,13 @@ def viz_hint(obj: object) -> str | None:
         return "array"
     if t in (set, frozenset):
         return "numberline" if all(type(x) in (int, float) for x in list(obj)[:20]) else "array"  # type: ignore[call-overload]
-    if t in DICT_TYPES:
+    if reads_as_dict(t):
         d: dict[Any, Any] = obj  # type: ignore[assignment]
         vals = list(dict.values(d))[:20]
+        # {"loss": [...], "val_loss": [...]} is a training history, not a
+        # graph whose vertices would be the float values.
+        if vals and all(is_number_sequence(v) for v in vals):
+            return "series"
         if vals and all(type(v) in (list, set, tuple, dict) for v in vals):
             return "graph"
         return "dict"

@@ -8,6 +8,7 @@ import { parseWorkerLine } from '../../src/kernel/protocol';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WEBVIEW_COMMANDS, WEBVIEW_COMMAND_IDS, validateWebviewMessage } from '../../src/ui/validate';
+import { niceTicks } from '../../webview/viz/common';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -135,6 +136,36 @@ describe('webview message validation', () => {
     for (const raw of [null, 1, 'x', [], { type: 'nope' }, { type: 'copy', text: 5 }, { type: 'traceStep', line: 0 }]) {
       assert.equal(validateWebviewMessage(raw), undefined);
     }
+  });
+});
+
+describe('ML panel messages', () => {
+  it('accepts bounded image, series and figure requests only', () => {
+    assert.deepEqual(validateWebviewMessage({ type: 'imageVariable', requestId: 1, name: 'X', start: 16, count: 16 }), { type: 'imageVariable', requestId: 1, name: 'X', start: 16, count: 16 });
+    assert.deepEqual(validateWebviewMessage({ type: 'seriesVariable', requestId: 2, name: 'losses', maxPoints: 800 }), { type: 'seriesVariable', requestId: 2, name: 'losses', maxPoints: 800 });
+    assert.deepEqual(validateWebviewMessage({ type: 'openFigure', execId: 3, index: 0 }), { type: 'openFigure', execId: 3, index: 0 });
+    for (const bad of [
+      { type: 'imageVariable', requestId: 1, name: 'X', start: 0, count: 65 },
+      { type: 'imageVariable', requestId: 1, name: 'x.y', start: 0, count: 1 },
+      { type: 'seriesVariable', requestId: 1, name: 'h', maxPoints: 1e9 },
+      { type: 'openFigure', execId: 1, index: 0, path: 'C:/x.html' },
+      { type: 'openFigure', execId: -1, index: 0 },
+    ]) {
+      const m = validateWebviewMessage(bad);
+      // Extra fields are dropped; out-of-range values are rejected.
+      if (m) assert.ok(!('path' in m), JSON.stringify(bad));
+      else assert.equal(m, undefined);
+    }
+    assert.equal(validateWebviewMessage({ type: 'openFigure', execId: -1, index: 0 }), undefined);
+  });
+});
+
+describe('chart ticks', () => {
+  it('terminates for values that differ only by rounding', () => {
+    const t = niceTicks(0.3, 0.1 + 0.2, 8);
+    assert.ok(t.length > 0 && t.length < 40);
+    assert.ok(niceTicks(1e17, 1e17 + 2, 6).length < 40);
+    assert.deepEqual(niceTicks(0, 10, 5), [0, 2, 4, 6, 8, 10]);
   });
 });
 

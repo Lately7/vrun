@@ -12,3 +12,4 @@ media/*.map
 dev/
 .claude/
 .venv312/
+dist/

@@ -162,7 +162,7 @@ window.addEventListener('message', (ev: MessageEvent) => {
       break;
     case 'variables': {
       const list = msg.list as VariablesList;
-      frames = list.variables.filter((v) => v.kind === 'dataframe' || v.kind === 'series').map((v) => v.name);
+      frames = list.variables.filter((v) => v.kind === 'dataframe' || v.kind === 'series' || v.table === true).map((v) => v.name);
       variables.setList(list);
       if (features.dataframe) void dataframe.refreshIfOpen();
       break;

@@ -37,7 +37,11 @@
       { "command": "vrun.interrupt", "title": "Interrupt Execution", "category": "vrun", "icon": "$(debug-pause)" },
       { "command": "vrun.showLog", "title": "Show Kernel Log", "category": "vrun" },
       { "command": "vrun.clearInlineResults", "title": "Clear Inline Results", "category": "vrun" },
-      { "command": "vrun.editInput", "title": "Edit Program Input (stdin)", "category": "vrun" }
+      { "command": "vrun.editInput", "title": "Edit Program Input (stdin)", "category": "vrun" },
+      { "command": "vrun.newPracticeFile", "title": "New Practice File (ML, pandas, algorithms)", "category": "vrun" }
+    ],
+    "snippets": [
+      { "language": "python", "path": "./snippets/python.json" }
     ],
     "keybindings": [
       { "command": "vrun.runSelection", "key": "ctrl+alt+enter", "mac": "cmd+alt+enter", "when": "editorTextFocus && editorLangId == python" },
@@ -109,8 +113,8 @@
           "description": "Time budget for DataFrame summaries and other inspection requests."
         },
         "vrun.trace.maxSteps": {
-          "type": "number", "default": 1000, "minimum": 10, "maximum": 20000,
-          "description": "Maximum recorded steps for the algorithm visualizer."
+          "type": "number", "default": 5000, "minimum": 10, "maximum": 50000,
+          "description": "Maximum recorded steps for the algorithm visualizer (a sort of 50 numbers takes about 2000)."
         },
         "vrun.trace.timeoutMs": {
           "type": "number", "default": 15000, "minimum": 500, "maximum": 600000,
@@ -119,6 +123,10 @@
         "vrun.safeMl.confirmRepeatTraining": {
           "type": "boolean", "default": true,
           "description": "Ask before re-running a cell that trains a model and already ran in this kernel session."
+        },
+        "vrun.safeMl.confirmAfterSeconds": {
+          "type": "number", "default": 5, "minimum": 0, "maximum": 86400,
+          "description": "Only ask before repeating training when its previous run took at least this many seconds (0 = always ask)."
         }
       }
     }
@@ -131,6 +139,8 @@
     "test:py": "node scripts/run-pytest.mjs",
     "test:vscode": "npm run build && node esbuild.mjs --tests && node out/test/integration/runTest.js",
     "package": "npm run build -- --production && vsce package --no-dependencies --allow-missing-repository",
+    "dist": "node scripts/make-dist.mjs",
+    "setup:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-dev.ps1",
     "vscode:prepublish": "node esbuild.mjs --production"
   },
   "devDependencies": {

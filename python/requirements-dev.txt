@@ -1,0 +1,8 @@
+# Libraries the test-suite and benchmarks use. The kernel itself is
+# stdlib-only; pandas/NumPy/matplotlib/scikit-learn are exercised when present.
+pytest>=8
+psutil
+pandas>=2.2
+numpy
+matplotlib
+scikit-learn

@@ -8,6 +8,7 @@ import tempfile
 import uuid
 
 import pytest
+from conftest import full_heap
 
 
 def _trace(kernel, code: str, **params: object) -> dict[str, object]:
@@ -29,7 +30,8 @@ def _module_locals(result: dict[str, object]) -> tuple[dict[str, object], dict[s
     assert isinstance(steps, list) and steps
     step = steps[-1]
     assert isinstance(step, dict)
-    return _locals(step, 0), step
+    # Steps carry heap deltas: give the helpers the complete final heap.
+    return _locals(step, 0), {**step, "heap": full_heap(result)}
 
 
 def _heap_node(step: dict[str, object], value: object) -> dict[str, object]:
@@ -179,10 +181,11 @@ def test_student_sees_tuple_assignment_swaps_in_bubble_sort(kernel):
     locals_, step = _module_locals(result)
     arr = _heap_node(step, locals_["arr"])
     snapshots = []
-    for trace_step in result["steps"]:
+    for k, trace_step in enumerate(result["steps"]):
         current = _locals(trace_step, 0).get("arr")
         if isinstance(current, dict) and "ref" in current:
-            snapshots.append(_heap_node(trace_step, current)["items"])
+            full = {**trace_step, "heap": full_heap(result, k)}  # steps carry heap deltas
+            snapshots.append(_heap_node(full, current)["items"])
     assert result["error"] is None
     assert arr["items"] == [1, 2, 4, 5]
     assert [1, 5, 4, 2] in snapshots

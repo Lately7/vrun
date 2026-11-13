@@ -97,7 +97,8 @@ def encode_int(i: int) -> JsonValue:
 
 
 def _is_pandas(t: type) -> bool:
-    return type_module(t).startswith("pandas")
+    m = type_module(t)
+    return m == "pandas" or m.startswith("pandas.")  # not a user module "pandas_utils"
 
 
 def _is_numpy(t: type) -> bool:

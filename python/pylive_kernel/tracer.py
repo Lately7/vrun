@@ -5,6 +5,10 @@ touched) under ``sys.settrace``. For each executed line of the traced source
 we record the call stack, the locals of each traced frame and a heap of the
 objects they reference (see ``heap.HeapEncoder``).
 
+Each step carries only the heap nodes that changed since they were last sent
+(``heapDelta``); the webview rebuilds the full heap of a step. Every frame has
+an id (``fid``) for the call tree, and its parameter names on its first step.
+
 Limits (steps, bytes, wall time) are enforced by raising ``TraceLimit`` from
 the trace callback. It derives from ``BaseException`` so ordinary
 ``except Exception`` blocks in user code do not swallow it; if user code
@@ -90,6 +94,17 @@ class _ThreadRouter:
         return getattr(self._target(), name)
 
 
+_CO_VARARGS = 0x04
+_CO_VARKEYWORDS = 0x08
+_CO_RESUMABLE = 0x20 | 0x80 | 0x100 | 0x200  # generator, coroutine, async generator
+
+
+def _params(code: types.CodeType) -> list[str]:
+    n = code.co_argcount + code.co_kwonlyargcount
+    n += bool(code.co_flags & _CO_VARARGS) + bool(code.co_flags & _CO_VARKEYWORDS)
+    return list(code.co_varnames[:n])
+
+
 _HIDDEN_GLOBALS = {"__builtins__", "__name__", "__doc__", "__package__", "__loader__",
                    "__spec__", "__file__", "__annotations__", "__cached__"}
 
@@ -111,6 +126,15 @@ class Recorder:
         self.calls = 0
         self.skipped_deep = 0  # snapshots skipped near the recursion limit
         self.near_limit = False  # the stack came close to sys.getrecursionlimit()
+        # Frame ids for the call tree: assigned on "call", released on
+        # "return" (a later frame at the same address is a new call).
+        self.fids: dict[int, int] = {}
+        self.announced: set[int] = set()
+        self.next_fid = 1
+        # JSON of every heap node as last sent, keyed by heap id.
+        self.sent: dict[str, str] = {}
+        # Encoded frame (without params) and its JSON size, by frame id.
+        self.frames: dict[int, tuple[dict[str, Any], int]] = {}
 
     # sys.settrace entry point: only trace frames of the traced source.
     def global_trace(self, frame: types.FrameType, event: str, arg: Any) -> Any:
@@ -120,6 +144,9 @@ class Recorder:
             raise TraceLimit(self.stopped)
         if event == "call":
             self.calls += 1
+            if id(frame) not in self.fids:  # a resumed generator keeps its id
+                self.fids[id(frame)] = self.next_fid
+                self.next_fid += 1
         return self.local_trace
 
     def local_trace(self, frame: types.FrameType, event: str, arg: Any) -> Any:
@@ -133,6 +160,10 @@ class Recorder:
                 # snapshot needs a few more frames. Raising here would make
                 # CPython switch tracing off silently, so skip this snapshot.
                 self.skipped_deep += 1
+            if event == "return" and not frame.f_code.co_flags & _CO_RESUMABLE:
+                fid = self.fids.pop(id(frame), None)
+                if fid is not None:
+                    self.frames.pop(fid, None)
         return self.local_trace
 
     def _stop(self, reason: str) -> None:
@@ -162,26 +193,65 @@ class Recorder:
         enc = HeapEncoder(max_nodes=self.max_nodes, max_items=self.max_items,
                           ids=self.ids, keepalive=self.keepalive)
         stack = []
+        size = 0
         for fr in frames:
+            fid = self.fids.get(id(fr))
+            if fid is None:
+                fid = self.fids[id(fr)] = self.next_fid
+                self.next_fid += 1
             is_module = fr.f_code.co_name == "<module>"
-            names = fr.f_globals if is_module else fr.f_locals
-            local_vars = []
-            for name, value in list(names.items()):
-                if is_module and (name in _HIDDEN_GLOBALS or isinstance(value, types.ModuleType)):
-                    continue
-                if name.startswith("__"):
-                    continue
-                local_vars.append([name, enc.encode(value)])
-            stack.append({"func": fr.f_code.co_name, "line": fr.f_lineno, "locals": local_vars})
+            cached = self.frames.get(fid)
+            # A suspended caller cannot change its own locals: only the top
+            # frame runs, globals change from anywhere and closures through
+            # cells. Its objects can change, but only through a frame that
+            # reaches them, which is encoded. Re-encoding every frame made a
+            # deep recursion quadratic.
+            if cached is not None and fr is not frame and not is_module and not fr.f_code.co_cellvars:
+                entry, entry_size = cached
+            else:
+                names = fr.f_globals if is_module else fr.f_locals
+                local_vars = []
+                for name, value in list(names.items()):
+                    # type(), not isinstance(): a user class's __class__
+                    # property would run; globals()[1] = ... gives int keys.
+                    if type(name) is not str or name.startswith("__"):
+                        continue
+                    if is_module and (name in _HIDDEN_GLOBALS or type(value) is types.ModuleType):
+                        continue
+                    local_vars.append([name, enc.encode(value)])
+                entry = {"func": fr.f_code.co_name, "line": fr.f_lineno, "locals": local_vars, "fid": fid}
+                entry_size = len(json.dumps(entry, separators=(",", ":")))
+                self.frames[fid] = (entry, entry_size)
+            if fid not in self.announced:
+                self.announced.add(fid)
+                entry = {**entry, "params": _params(fr.f_code)}
+                entry_size += 40
+            stack.append(entry)
+            size += entry_size
+        ret = enc.encode(arg) if event == "return" else None
+        # Only nodes that changed since they were last sent: a sort of 50
+        # numbers repeated the whole list on every one of its 2000 steps.
+        delta: dict[str, Any] = {}
+        for key, node in enc.heap.items():
+            js = json.dumps(node, separators=(",", ":"))
+            if self.sent.get(key) != js:
+                self.sent[key] = js
+                delta[key] = node
+                size += len(js) + len(key) + 4
         step: dict[str, Any] = {"line": frame.f_lineno, "event": event, "stack": stack,
-                                "heap": enc.heap, "out": self.out.size}
+                                "heap": delta, "out": self.out.size}
+        gone = [str(oid) for oid in enc.missing if str(oid) in self.sent]
+        if gone:
+            step["gone"] = gone
+            for key in gone:
+                del self.sent[key]
         if event == "return":
-            step["ret"] = enc.encode(arg)
+            step["ret"] = ret
         elif event == "exception" and isinstance(arg, tuple) and arg:
             step["exc"] = getattr(arg[0], "__name__", "Exception")
         if enc.truncated:
             step["truncated"] = True
-        size = len(json.dumps(step, separators=(",", ":")))
+        size += 80 + len(json.dumps(step.get("ret"), separators=(",", ":"))) + sum(len(g) + 3 for g in gone)
         if self.bytes + size > self.max_bytes:
             self._stop(f"size limit ({self.max_bytes // 1024} KiB) reached")
         self.bytes += size
@@ -221,6 +291,9 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
     sys.stdout = _ThreadRouter(old_out, out, tid)  # type: ignore[assignment]
     sys.stderr = _ThreadRouter(old_err, out, tid)  # type: ignore[assignment]
     started = time.perf_counter()
+    # A traced program that lowers the recursion limit must not leave the
+    # kernel at that limit.
+    recursion_limit = sys.getrecursionlimit()
     swap = StdinSwap(program_input)
     swap.__enter__()
     sys.settrace(rec.global_trace)
@@ -246,9 +319,12 @@ def run_trace(code: str, max_steps: int = 1000, max_bytes: int = 6_000_000,
         sys.settrace(None)
         sys.stdout, sys.stderr = old_out, old_err
         swap.__exit__()
+        if sys.getrecursionlimit() != recursion_limit:
+            sys.setrecursionlimit(recursion_limit)
     elapsed = time.perf_counter() - started
     return {
         "steps": rec.steps,
+        "heapDelta": True,
         "stopped": rec.stopped,
         "error": error,
         # Make truncation visible in the text itself, not only as a flag.

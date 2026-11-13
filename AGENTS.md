@@ -29,6 +29,7 @@ files it may create or change; everything else is read-only for that task.
 ## Commands
 
 ```powershell
+npm run setup:dev        # first time: npm ci, .venv (python/requirements-dev.txt), checks
 npm install
 npm run build            # esbuild: extension + webview
 npm run typecheck        # tsc --noEmit
@@ -36,10 +37,13 @@ npm test                 # node unit tests (protocol, kernel client against real
 npm run test:py          # pytest python/tests
 npm run test:vscode      # integration tests in an Extension Development Host
 npm run package          # produces vrun-<version>.vsix
+npm run dist             # VSIX + dist/vrun-<version>-installer.zip (install/ scripts)
 python benchmarks/run_benchmarks.py   # see BENCHMARKS.md
 ```
 
-Set `PYLIVE_PYTHON` to choose the interpreter used by tests (it needs pandas).
+Tests use `.venv` when it exists; set `PYLIVE_PYTHON` to choose another
+interpreter (it needs pandas). Keep `install/*.ps1` and `scripts/*.ps1`
+ASCII-only: Windows PowerShell 5.1 misreads UTF-8 scripts without a BOM.
 
 ## Review process
 

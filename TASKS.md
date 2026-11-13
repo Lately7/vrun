@@ -14,6 +14,7 @@ Status legend: ✅ done (with evidence) · ⏳ open
 | 6 | ML safety | live never re-runs training; confirm repeated training; tested | ✅ |
 | 7 | Performance & release | benchmarks measured; docs; VSIX built and install-verified; Codex final review resolved | ✅ |
 | + | DSA visualizer (user request) | step tracer; number line; arrays with pointers; graph; tree; linked list; DP matrix; function graph; live re-trace | ✅ |
+| + | Practising ML (user request, 2026-11-13) | ML objects in Variables (tensors, models, estimators, optimizers, loaders, sparse); image preview; training-curve chart; terminal-like output (progress bars, colours, order, head+tail); figures per `plt.show()`; plotly without auto browser; Live prefix runs + helper/chained training detection; Safe ML threshold; worker processes end with the kernel; notebook magics; practice files and snippets; tests in `python/tests/test_ml_practice.py`, `test/unit/terminal.test.ts` | ✅ |
 
 ## Definition of Done — evidence
 

@@ -24,6 +24,8 @@ export interface HeapNode {
   type?: string;
   shape?: number[];
   dtype?: string;
+  /** 0-d arrays */
+  value?: Encoded;
 }
 export type Heap = Record<string, HeapNode | null>;
 
@@ -62,6 +64,13 @@ export function fmtScalar(v: Encoded | undefined, heap?: Heap): string {
     const node = heap?.[String(v.ref)];
     if (!node) return '…';
     if (node.kind === 'object') return `${node.type ?? 'object'}`;
+    if (node.kind === 'ndarray') {
+      // Short 1-D arrays read as their values (cross_validate's test_score).
+      if (node.items && node.shape?.length === 1 && node.shape[0] <= 8) return `[${node.items.map((x) => fmtScalar(x, heap)).join(', ')}]`;
+      if (node.value !== undefined) return fmtScalar(node.value, heap);
+      return `ndarray ${(node.shape ?? []).join('×')} ${node.dtype ?? ''}`.trim();
+    }
+    if (node.kind === 'dict' && node.type) return `${node.type}[${node.len ?? '?'}]`;
     return `${node.kind}[${node.len ?? '?'}]`;
   }
   switch (v.$t) {

@@ -71,7 +71,7 @@ function tests(): void {
     for (const id of [
       'vrun.startKernel', 'vrun.restartKernel', 'vrun.stopKernel', 'vrun.runSelection', 'vrun.runCell',
       'vrun.runFile', 'vrun.toggleLiveMode', 'vrun.openVariables', 'vrun.openDataFrame', 'vrun.interrupt',
-      'vrun.visualize', 'vrun.toggleLiveVisualize',
+      'vrun.visualize', 'vrun.toggleLiveVisualize', 'vrun.newPracticeFile',
     ]) {
       assert.ok(all.includes(id), `missing command ${id}`);
     }

@@ -10,3 +10,4 @@
 !python/launcher.py
 !python/pylive_kernel/*.py
 !examples/*.py
+!snippets/*.json

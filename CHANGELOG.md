@@ -1,5 +1,92 @@
 # Changelog
 
+## Unreleased — practising ML
+
+### Added
+* Variables: PyTorch / TensorFlow tensors (shape, dtype, device, grad, loss
+  value), networks (parameters, layers, device, mode), scikit-learn
+  hyperparameters, pipeline steps, `best_params_`, optimizers, DataLoaders,
+  sparse matrices, Keras `History`, sklearn bunches as dicts, metric values.
+* Image preview of image-shaped arrays and tensors (PNG encoded by the
+  kernel with the standard library); training-curve chart for loss lists,
+  history dicts and Keras `History` (min/max downsampling, best epoch).
+* 2-D arrays and CPU tensors open in the DataFrame tab.
+* Output behaves like a terminal: `\r` / `\b` progress bars redraw in place,
+  ANSI colours, ordered stdout/stderr, head + tail of long logs, folded
+  repeated warnings; `isatty()` is true so Keras / tqdm use their one-line bars.
+* `plt.show()` separates figures; `fig` values are drawn; plot return values
+  and a trailing `;` hide the value; plotly figures open on request.
+* Notebook habits: `%matplotlib`, `%timeit`, `%time`, `display()`; `!pip`
+  explains the terminal command. Error hints for missing packages and
+  DataLoader workers on Windows. `__file__` is set for saved scripts.
+* *vrun: New Practice File* (sklearn, PyTorch, Keras, pandas, algorithms) and
+  ML snippets.
+* Setting `vrun.safeMl.confirmAfterSeconds`.
+
+* Installer bundle for other machines: `npm run dist` builds the VSIX and
+  `dist/vrun-<version>-installer.zip`. On Windows, double-click
+  `install.cmd`: it finds or installs (winget) VS Code and Python 3.12+,
+  offers pandas / numpy / matplotlib / openpyxl, removes the old PyLive /
+  Veil extensions and installs vrun. `install.sh` for macOS / Linux,
+  `INSTALL.md` in Vietnamese and English.
+* `scripts/setup-dev.ps1` (`npm run setup:dev`): npm dependencies, a `.venv`
+  from `python/requirements-dev.txt` (rebuilt when copied from another
+  machine), build and checks.
+
+### Changed
+* Live Mode runs a cell up to its first training / I/O statement instead of
+  skipping it whole, and marks that line. It stops earlier rather than
+  re-create a model, optimizer, counter or loss list that the skipped
+  training uses, so a trained model survives a Live run; later `[live]`
+  cells wait for the next manual run. Heavy imports no longer block it.
+* Recognised as training: chained `.fit()`, training inside helper functions
+  (also helpers that call helpers, `@tf.function` / decorated ones), class
+  methods (`Trainer().run()`, `t.run()`), helpers passed to `map()` /
+  `Thread(target=)`, TensorFlow custom loops, `optimizer.step()` and
+  Hugging Face `trainer.train()`. Cheap preprocessing (`StandardScaler`) is
+  not, and a torch module's `model.train()` is a mode switch.
+* Safe ML asks again only when the previous training run took a while.
+* Wide DataFrame results (`describe()`, `corr()`) are shown in full; the
+  result's *open* link works with the DataFrame tab off.
+* Unit and integration tests default to the repository's `.venv`, like
+  `npm run test:py`.
+
+### Fixed
+* Worker processes (`n_jobs=-1`, DataLoader workers) outlived Stop / Restart.
+* A `__del__` that prints could deadlock the kernel.
+* An interrupt during `import torch` left torch unimportable until restart.
+* The Column panel showed the DataFrame's name instead of the column's.
+* A pipeline was reported as not fitted; numpy-valued `best_params_` were dropped.
+* A training-history dict was drawn as a graph; chart ticks could loop forever.
+* More than 8 figures per run were dropped silently.
+* Found in review of this release:
+  * matplotlib in a subprocess or multiprocessing worker crashed (the kernel's
+    backend leaked through `MPLBACKEND`).
+  * `plt.pause()` / `plt.show(block=False)` loops showed the first, empty
+    frame instead of the final plot.
+  * Each plotly `fig.show()` left a 4.8 MB file in a shared temp folder; files
+    are now ~7 KB, private to the kernel, and only the last 30 are kept. The
+    first `fig.show()` after `import plotly.graph_objects` opened a browser.
+  * `%%writefile` ran the cell instead of writing it; magics inside strings
+    were rewritten; CRLF files broke `%matplotlib`. A missing sibling module
+    is no longer sent to pip, and `sklearn` / `cv2` / `PIL` hints name the
+    right package.
+  * Inspecting a variable could run user code (classes in modules named
+    like `torch_utils`, a Keras model's `weights` property) or end the kernel
+    with `SystemExit`.
+  * Square images were cut into strips; phone-sized photos and huge arrays
+    could not be previewed or charted; label masks were black; bfloat16
+    tensors showed an error; the chart dropped the last loss value and lists
+    of NumPy floats had no chart.
+  * Pipelines ending in `'passthrough'` or another pipeline read as not
+    fitted; XGBoost listed defaults as changed; `dok_matrix` read as a dict;
+    `np.bytes_` was opaque.
+  * The training chart cut off its highest points; very long output lines
+    lost text; huge cursor movements could freeze the panel; `ESC ( B` showed
+    a stray `B`; stderr progress bars were coloured as errors; output after a
+    truncated run could be lost.
+  * A trace that lowered the recursion limit left the kernel at that limit.
+
 ## 0.3.0 — 2026-10-29
 
 ### Renamed
