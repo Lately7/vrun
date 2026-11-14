@@ -5,7 +5,7 @@
  * else on a circle. DOM-free so the layouts can be unit tested.
  */
 import { Encoded, Heap, HeapNode, isRef } from '../format';
-import { node, shortScalar } from './common';
+import { idScalar, node, shortScalar } from './common';
 import { EdgeItem } from './shapes';
 
 export interface GEdge {
@@ -36,14 +36,18 @@ const DX = 78;
 const DY = 82;
 const PAD = 30;
 
-/** Display key of a vertex: scalars as text, small tuples as (r,c); other refs are not vertices. */
+/**
+ * Identity of a vertex: scalars as text, small tuples as (r,c); other refs
+ * are not vertices. Strings are kept whole, so math1 and math2 (or
+ * prerequisite_1 and prerequisite_2) stay two vertices.
+ */
 export function vertexKey(v: Encoded, heap: Heap): string | undefined {
   if (isRef(v)) {
     const n = heap[String(v.ref)];
-    if (n?.kind === 'tuple' && n.items) return '(' + n.items.map((x) => shortScalar(x, heap)).join(',') + ')';
+    if (n?.kind === 'tuple' && n.items) return '(' + n.items.map((x) => idScalar(x, heap)).join(',') + ')';
     return undefined;
   }
-  return shortScalar(v, heap);
+  return idScalar(v, heap);
 }
 
 /** Returns true when a dict looks like an adjacency structure: every value a collection. */
@@ -57,6 +61,26 @@ export function isAdjacency(n: HeapNode, heap: Heap): boolean {
 
 export const pairId = (a: string, b: string): string => (a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`);
 
+function tupleOf(heap: Heap, v: Encoded): Encoded[] | undefined {
+  const t = node(heap, v);
+  return t?.kind === 'tuple' && t.items ? t.items : undefined;
+}
+
+/** True when every edge has its reverse with the same weight. */
+function isSymmetric(edges: GEdge[]): boolean {
+  const w = new Map(edges.map((e) => [`${e.from}\u0000${e.to}`, e.weight]));
+  return edges.every((e) => {
+    const k = `${e.to}\u0000${e.from}`;
+    return w.has(k) && w.get(k) === e.weight;
+  });
+}
+
+/**
+ * Vertices and edges of {u: [v, ...]}, {u: [(v, w), ...]}, {u: {v: w}}.
+ * A 2-tuple in a neighbour list is a vertex when the dict is keyed by such
+ * tuples (a grid graph {(r, c): [(nr, nc), ...]}), else (neighbour, weight);
+ * ((r, c), w) is a tuple vertex with a weight.
+ */
 export function adjacencyModel(g: HeapNode, heap: Heap): GraphModel {
   const nodes: string[] = [];
   const seen = new Set<string>();
@@ -66,6 +90,13 @@ export function adjacencyModel(g: HeapNode, heap: Heap): GraphModel {
       nodes.push(k);
     }
   };
+  const keys = new Set<string>();
+  let tupleKeys = (g.entries ?? []).length > 0;
+  for (const [k] of g.entries ?? []) {
+    const key = vertexKey(k, heap);
+    if (key !== undefined) keys.add(key);
+    if (tupleOf(heap, k)?.length !== 2) tupleKeys = false;
+  }
   const edges: GEdge[] = [];
   for (const [kEnc, vEnc] of g.entries ?? []) {
     const from = vertexKey(kEnc, heap);
@@ -81,26 +112,54 @@ export function adjacencyModel(g: HeapNode, heap: Heap): GraphModel {
       continue;
     }
     for (const it of nb.items ?? []) {
-      // (neighbor, weight) tuples are common for weighted graphs.
-      const t = node(heap, it);
-      if (t?.kind === 'tuple' && t.items && t.items.length === 2 && !isRef(t.items[0])) {
-        const to = vertexKey(t.items[0], heap);
+      const t = tupleOf(heap, it);
+      const asVertex = vertexKey(it, heap);
+      const pairVertex = t?.length === 2 && !isRef(t[0]) && !isRef(t[1]) && (tupleKeys || (asVertex !== undefined && keys.has(asVertex)));
+      if (t && t.length === 2 && !pairVertex && (!isRef(t[0]) || tupleOf(heap, t[0]) !== undefined) && !isRef(t[1])) {
+        const to = vertexKey(t[0], heap);
         add(to);
-        if (to !== undefined) edges.push({ from, to, weight: shortScalar(t.items[1], heap) });
+        if (to !== undefined) edges.push({ from, to, weight: shortScalar(t[1], heap) });
       } else {
-        const to = vertexKey(it, heap);
-        add(to);
-        if (to !== undefined) edges.push({ from, to });
+        add(asVertex);
+        if (asVertex !== undefined) edges.push({ from, to: asVertex });
       }
     }
   }
-  const has = new Set(edges.map((e) => `${e.from}\u0000${e.to}`));
-  const directed = edges.some((e) => !has.has(`${e.to}\u0000${e.from}`));
-  return { nodes, edges, directed };
+  return { nodes, edges, directed: !isSymmetric(edges) };
 }
 
-/** An edge list is an undirected graph; vertices in order of first appearance (sorted when all numeric). */
-export function edgeListModel(list: EdgeItem[]): GraphModel {
+/**
+ * adj = [[1, 2], [0], [0]] (or [(v, w), ...] rows): vertex i is row i.
+ */
+export function listAdjacencyModel(rows: Encoded[][], heap: Heap): GraphModel {
+  const nodes = rows.map((_, i) => String(i));
+  const edges: GEdge[] = [];
+  rows.forEach((r, i) => {
+    for (const it of r) {
+      const t = tupleOf(heap, it);
+      if (t && t.length === 2) edges.push({ from: String(i), to: shortScalar(t[0], heap), weight: shortScalar(t[1], heap) });
+      else edges.push({ from: String(i), to: shortScalar(it, heap) });
+    }
+  });
+  return { nodes, edges, directed: !isSymmetric(edges) };
+}
+
+/**
+ * A dict of collections is a graph when its name says so or when nearly
+ * every neighbour is itself a key. {3: [0, 2, 5]} (value -> positions) and
+ * {'act': ['cat', 'act']} (groups) are tables, not graphs.
+ */
+export function looksLikeGraph(name: string, n: HeapNode, heap: Heap, graphName: RegExp): boolean {
+  if (graphName.test(name)) return true;
+  const m = adjacencyModel(n, heap);
+  if (!m.edges.length) return false;
+  const keys = new Set((n.entries ?? []).map(([k]) => vertexKey(k, heap)));
+  const hits = m.edges.filter((e) => keys.has(e.to)).length;
+  return hits >= 0.8 * m.edges.length;
+}
+
+/** Vertices in order of first appearance (sorted when all numeric); undirected unless `directed`. */
+export function edgeListModel(list: EdgeItem[], directed = false): GraphModel {
   const nodes: string[] = [];
   const seen = new Set<string>();
   const edges: GEdge[] = [];
@@ -112,7 +171,18 @@ export function edgeListModel(list: EdgeItem[]): GraphModel {
     edges.push({ from: e.u, to: e.v, weight: e.w });
   }
   if (nodes.every((k) => /^-?\d+$/.test(k))) nodes.sort((a, b) => Number(a) - Number(b));
-  return { nodes, edges, directed: false };
+  return { nodes, edges, directed };
+}
+
+/** Text drawn inside a vertex: up to 12 characters, the tail kept so math1 and math2 stay apart. */
+export function vertexText(k: string): string {
+  return k.length <= 12 ? k : `${k.slice(0, 6)}…${k.slice(-5)}`;
+}
+
+/** Horizontal radius of a vertex: a circle for short labels, wider for long ones. */
+export function vertexRx(k: string): number {
+  const t = vertexText(k);
+  return t.length <= 3 ? NODE_R : Math.max(NODE_R, Math.ceil(t.length * 3.7 + 7));
 }
 
 function neighbours(m: GraphModel): Map<string, string[]> {
@@ -152,10 +222,17 @@ function isAcyclic(m: GraphModel, adj: Map<string, string[]>): boolean {
   return true;
 }
 
+/** Distance between neighbouring vertices: room for the widest label, a weight and a `dist=..` label. */
+function spacing(nodes: string[]): number {
+  return Math.max(DX, 2 * Math.max(NODE_R, ...nodes.map(vertexRx)) + 30);
+}
+
 function circle(nodes: string[]): GraphLayout {
   const n = nodes.length;
-  const R = n <= 1 ? 0 : Math.max(70, Math.min(220, n * 18));
-  const width = 2 * R + 120;
+  const dx = spacing(nodes);
+  // Neighbours on the circle stay `dx` apart, as in the layered layouts.
+  const R = n <= 1 ? 0 : Math.max(70, Math.min(220 * (dx / DX), n * 18 * (dx / DX)));
+  const width = 2 * R + 120 + (dx - DX);
   const height = 2 * R + 90;
   const pos = new Map<string, Pos>();
   nodes.forEach((k, i) => {
@@ -168,6 +245,7 @@ function circle(nodes: string[]): GraphLayout {
 export function layoutGraph(m: GraphModel): GraphLayout {
   const n = m.nodes.length;
   if (n === 0) return { pos: new Map(), width: 120, height: 60, kind: 'circle' };
+  const dx = spacing(m.nodes);
   const adj = neighbours(m);
   const root = m.nodes[0];
   // BFS from the first vertex: levels and the BFS tree.
@@ -217,7 +295,7 @@ export function layoutGraph(m: GraphModel): GraphLayout {
     cols = next;
     for (const k of m.nodes) {
       depth = Math.max(depth, level.get(k)!);
-      pos.set(k, [PAD + xOf.get(k)! * DX + DX / 2, PAD + level.get(k)! * DY]);
+      pos.set(k, [PAD + xOf.get(k)! * dx + dx / 2, PAD + level.get(k)! * DY]);
     }
   } else {
     const rows: string[][] = [];
@@ -239,19 +317,20 @@ export function layoutGraph(m: GraphModel): GraphLayout {
       row.forEach((k, i) => xOf.set(k, off + i));
     });
     depth = rows.length - 1;
-    for (const k of m.nodes) pos.set(k, [PAD + xOf.get(k)! * DX + DX / 2, PAD + level.get(k)! * DY]);
+    for (const k of m.nodes) pos.set(k, [PAD + xOf.get(k)! * dx + dx / 2, PAD + level.get(k)! * DY]);
   }
-  return { pos, width: Math.max(120, 2 * PAD + cols * DX), height: 2 * PAD + depth * DY + 24, kind: tree ? 'tree' : 'layered' };
+  return { pos, width: Math.max(120, 2 * PAD + cols * dx), height: 2 * PAD + depth * DY + 24, kind: tree ? 'tree' : 'layered' };
 }
 
 /** `base` positions for the vertices it knows; the rest go on an extra row below. */
 export function withFallback(base: GraphLayout, nodes: string[]): GraphLayout {
   const missing = nodes.filter((k) => !base.pos.has(k));
   if (!missing.length) return base;
+  const dx = spacing(missing);
   const pos = new Map(base.pos);
   const y = base.height + 10;
-  missing.forEach((k, i) => pos.set(k, [PAD + i * DX + DX / 2, y]));
-  return { pos, width: Math.max(base.width, 2 * PAD + missing.length * DX), height: y + NODE_R + 24, kind: base.kind };
+  missing.forEach((k, i) => pos.set(k, [PAD + i * dx + dx / 2, y]));
+  return { pos, width: Math.max(base.width, 2 * PAD + missing.length * dx), height: y + NODE_R + 24, kind: base.kind };
 }
 
 const finalLayouts = new WeakMap<HeapNode, GraphLayout>();

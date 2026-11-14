@@ -23,8 +23,16 @@ trình cài đặt trên Windows sẽ hỏi rồi cài giúp bằng `winget`.
 4. Mở một thư mục và chọn **Trust**, vì vrun chỉ chạy code trong thư mục tin cậy.
 5. `Ctrl+Shift+P` → **Python: Select Interpreter** → chọn Python mà trình cài
    đặt đã báo.
-6. Mở một file `.py` và bấm `Ctrl+Alt+C` (Run Cell). Lệnh *vrun: Show Kernel
-   Log* cho biết kernel đang dùng Python nào.
+6. Mở một file `.py`, bấm **Run Cell** phía trên mỗi dòng `# %%` hoặc
+   `Ctrl+Alt+C`. Lệnh *vrun: Show Kernel Log* cho biết kernel đang dùng
+   Python nào.
+   * Nút tam giác *Run Python File* và Shift+Enter thuộc extension Python
+     (chạy trong terminal, vrun không thấy biến). Nếu có extension Jupyter,
+     *Run Cell* / Shift+Enter / Ctrl+Enter của Jupyter chạy trong Python
+     riêng của Jupyter. Bật `vrun.shiftEnterRunsCell` để các phím này chạy
+     trong vrun.
+   * File dữ liệu và module của bạn đặt cạnh file `.py` là đọc được, ở thư
+     mục nào cũng vậy, không cần chép về thư mục gốc của workspace.
 
 Cài không cần hỏi (dùng cho nhiều máy): `install.cmd -Yes`.
 
@@ -62,6 +70,8 @@ Bạn cũng có thể cài trong VS Code: *Extensions* → `…` → *Install fr
 | Bấm chạy mà không có gì xảy ra | Thư mục chưa được Trust: *Workspaces: Manage Workspace Trust*. |
 | Kernel không khởi động | Mở *vrun: Show Kernel Log*. Đặt `vrun.pythonPath` trong Settings để chỉ định file `python.exe`. |
 | Vòng lặp chạy mãi | `Ctrl+Alt+I` (Interrupt). Nếu kernel không dừng, chạy *vrun: Restart Kernel*. |
+| `UnicodeDecodeError` khi đọc CSV lưu từ Excel | vrun đọc file theo UTF-8. Lưu lại file bằng "CSV UTF-8", hoặc dùng `encoding='cp1258'` (tiếng Việt) / `encoding='cp1252'`. |
+| Chữ có dấu bị lỗi khi đọc output của lệnh Windows (`subprocess`) | Thêm `encoding='oem'` hoặc `errors='replace'`. |
 
 ## English
 
@@ -76,6 +86,14 @@ to install missing pieces with `winget`.
 * **Manual:** `code --install-extension vrun-0.3.0.vsix`.
 
 Then reload VS Code, open a folder and trust it, pick your interpreter with
-*Python: Select Interpreter*, open a `.py` file and press `Ctrl+Alt+C`.
+*Python: Select Interpreter*, open a `.py` file and click **Run Cell** above a
+`# %%` line or press `Ctrl+Alt+C`. The triangle *Run Python File* and
+Shift+Enter belong to the Python extension and run in a terminal, where vrun
+sees no variables; with the Jupyter extension, Shift+Enter / Ctrl+Enter run in
+Jupyter's own Python. Turn on `vrun.shiftEnterRunsCell` to make them run in
+vrun. Files next to your script are found from any folder. Text files are read
+as UTF-8: save Excel CSVs as "CSV UTF-8" (or pass `encoding='cp1252'`), and
+pass `encoding='oem'` to `subprocess.run(..., text=True)` for Windows console
+tools that print accented text.
 For ML practice run *vrun: New Practice File*; install PyTorch or TensorFlow
 yourself (`python -m pip install torch`), they are too large to offer.

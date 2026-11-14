@@ -8,7 +8,7 @@ import tempfile
 import uuid
 
 import pytest
-from conftest import full_heap
+from conftest import full_heap, full_stacks
 
 
 def _trace(kernel, code: str, **params: object) -> dict[str, object]:
@@ -30,8 +30,9 @@ def _module_locals(result: dict[str, object]) -> tuple[dict[str, object], dict[s
     assert isinstance(steps, list) and steps
     step = steps[-1]
     assert isinstance(step, dict)
-    # Steps carry heap deltas: give the helpers the complete final heap.
-    return _locals(step, 0), {**step, "heap": full_heap(result)}
+    # Steps carry heap and stack deltas: give the helpers the complete ones.
+    full = {**step, "stack": full_stacks(result)[-1], "heap": full_heap(result)}
+    return _locals(full, 0), full
 
 
 def _heap_node(step: dict[str, object], value: object) -> dict[str, object]:
@@ -104,8 +105,8 @@ def test_student_can_follow_mutual_recursion(kernel):
     locals_, _ = _module_locals(result)
     functions = {
         frame["func"]
-        for step in result["steps"]
-        for frame in step["stack"]
+        for stack in full_stacks(result)
+        for frame in stack
     }
     assert result["error"] is None
     assert {"is_even", "is_odd"} <= functions

@@ -1,7 +1,7 @@
 /** Variables panel: cheap metadata table with click-to-inspect. */
 import { HostError, request, send } from './api';
 import { button, clear, formatBytes, h, truncateText } from './dom';
-import { Encoded, Heap, HeapNode, fmtScalar } from './format';
+import { Encoded, Heap, HeapNode, fmtPreview, fmtPy, fmtScalar, shadowsBuiltin } from './format';
 import { Series, renderLineChart } from './viz/lineChart';
 
 export interface VariableInfo {
@@ -157,7 +157,8 @@ export class VariablesView {
       case 'scalar':
       case 'function':
       case 'class':
-        return fmtScalar(v.value);
+        // Quoted, with \n shown: 'abba\n' is not abba, and '10' is not 10.
+        return fmtPy(v.value);
       case 'sparse': {
         const pct = v.density !== undefined ? ` (${(v.density * 100).toFixed(v.density < 0.01 ? 2 : 1)}%)` : '';
         return `${v.shape?.join(' × ')} sparse ${v.format ?? ''} · ${fmtCount(v.nnz)} non-zeros${pct} · ${v.dtype ?? ''}`;
@@ -184,7 +185,7 @@ export class VariablesView {
         if (v.preview) {
           const more = (v.len ?? 0) > v.preview.length ? ', …' : '';
           const cats = v.categories !== undefined ? ` · ${v.categories} categories` : '';
-          return `[${v.preview.map((p) => fmtScalar(p)).join(', ')}${more}]${v.dtype ? ` ${v.dtype}` : ''}${cats}`;
+          return `[${v.preview.map((p) => fmtPy(p)).join(', ')}${more}]${v.dtype ? ` ${v.dtype}` : ''}${cats}`;
         }
         return `<${v.type}>`;
       case 'dataframe':
@@ -193,9 +194,10 @@ export class VariablesView {
         return `${v.shape?.[0].toLocaleString()} values · ${v.dtype}`;
       case 'ndarray':
         if (v.value !== undefined) return `${fmtScalar(v.value)} · 0-d ${v.dtype}`;
-        return `${v.shape?.join(' × ')} ${v.dtype}${v.preview ? ` [${v.preview.map((p) => fmtScalar(p)).join(', ')}]` : ''}`;
+        return `${v.shape?.join(' × ')} ${v.dtype}${v.preview ? ` [${v.preview.map((p) => fmtPy(p)).join(', ')}]` : ''}`;
       case 'estimator': {
-        const params = Object.entries(v.params ?? {}).map(([k, x]) => `${k}=${fmtScalar(x)}`).join(', ');
+        // As scikit-learn prints it: SVC(kernel='rbf').
+        const params = Object.entries(v.params ?? {}).map(([k, x]) => `${k}=${fmtPy(x)}`).join(', ');
         const short = v.type.split('.').pop() ?? v.type;
         const head = v.steps?.length ? v.steps.map((st) => st[1]).join(' → ') : `${short}(${params})`;
         const best = v.facts?.best_score_ !== undefined ? ` · best score ${fmtScalar(v.facts.best_score_ as Encoded)}` : '';
@@ -223,14 +225,9 @@ export class VariablesView {
       case 'set':
       case 'frozenset':
       case 'deque':
-      case 'dict': {
-        // Metrics read as "accuracy: 0.95, f1: 0.91", not just their keys.
-        const vals = v.kind === 'dict' ? v.previewValues : undefined;
-        const items = (v.preview ?? []).map((p, i) => (vals && i < vals.length ? `${fmtScalar(p)}: ${fmtScalar(vals[i])}` : fmtScalar(p))).join(', ');
-        const more = (v.len ?? 0) > (v.preview?.length ?? 0) ? ', …' : '';
-        const [o, c] = v.kind === 'dict' ? ['{', '}'] : v.kind === 'tuple' ? ['(', ')'] : v.kind === 'list' ? ['[', ']'] : ['{', '}'];
-        return `${o}${items}${more}${c}`;
-      }
+      case 'dict':
+        // Metrics read as "'accuracy': 0.95, 'f1': 0.91", not just their keys.
+        return fmtPreview(v.kind, v.preview ?? [], v.len, v.kind === 'dict' ? v.previewValues : undefined, v.type);
       default:
         return `<${v.type}>`;
     }
@@ -289,6 +286,16 @@ export class VariablesView {
       if (v.chart) actions.appendChild(button('chart', () => this.toggleChart(v.name), { cls: 'link-btn', title: 'Plot the values as a curve (epochs / steps)', pressed: this.charts.has(v.name) }));
       if (v.viz && v.viz !== 'series' && !isFrame && visualizer) actions.appendChild(button('draw', () => void this.draw(v.name), { cls: 'link-btn', title: `Draw as ${v.viz}` }));
       const nameCell = h('td', { class: 'name' }, expandable ? h('span', { class: 'chev', 'aria-hidden': 'true' }, this.expanded.has(v.name) ? '▾' : '▸') : h('span', { class: 'chev' }, ''), v.name);
+      // One kernel serves every file of the window: `max = 0` left by an
+      // earlier file makes max(a) fail in this one, with no hint why.
+      if (shadowsBuiltin(v.name, v.value, v.type)) {
+        nameCell.appendChild(
+          h('span', {
+            class: 'badge warn',
+            title: `This variable hides Python's built-in ${v.name}(). Code run later in this kernel (other files too) gets this value when it calls ${v.name}(...). Rename it, or run: del ${v.name}`,
+          }, 'shadows built-in'),
+        );
+      }
       const tr = h('tr', { tabindex: 0, class: expandable ? 'expandable' : '' },
         nameCell,
         h('td', { class: 'value', title: this.summary(v) }, truncateText(this.summary(v), 120)),
@@ -409,7 +416,7 @@ export class VariablesView {
   /** A 2-D array window (or a 0-d value): the first rows and columns. */
   private arrayDetail(node: HeapNode, cell: HTMLElement): void {
     if (node.value !== undefined) {
-      cell.appendChild(h('pre', { class: 'console small' }, fmtScalar(node.value)));
+      cell.appendChild(h('pre', { class: 'console small' }, fmtPy(node.value)));
       return;
     }
     const rows = node.rows ?? [];
@@ -423,7 +430,7 @@ export class VariablesView {
     t.appendChild(head);
     rows.slice(0, maxRows).forEach((r, i) => {
       const tr = h('tr', {}, h('th', {}, String(i)));
-      for (const x of r.slice(0, maxCols)) tr.appendChild(h('td', {}, fmtScalar(x)));
+      for (const x of r.slice(0, maxCols)) tr.appendChild(h('td', {}, fmtPy(x)));
       t.appendChild(tr);
     });
     cell.appendChild(t);
@@ -438,16 +445,16 @@ export class VariablesView {
     const t = h('table', { class: 'kv' });
     const row = (k: string, val: string) => t.appendChild(h('tr', {}, h('th', {}, k), h('td', {}, val)));
     const show = (x: Encoded | Encoded[] | Record<string, Encoded>): string => {
-      if (Array.isArray(x)) return x.map((y) => fmtScalar(y)).join(', ');
+      if (Array.isArray(x)) return x.map((y) => fmtPy(y)).join(', ');
       if (x !== null && typeof x === 'object' && !('$t' in x) && !('ref' in x)) {
-        return Object.entries(x as Record<string, Encoded>).map(([k, y]) => `${k}=${fmtScalar(y)}`).join(', ');
+        return Object.entries(x as Record<string, Encoded>).map(([k, y]) => `${k}=${fmtPy(y)}`).join(', ');
       }
-      return fmtScalar(x as Encoded);
+      return fmtPy(x as Encoded);
     };
     if (r.kind === 'estimator') {
       if (r.steps?.length) row('steps', r.steps.map(([n, cls]) => `${n}: ${cls}`).join('  →  '));
       const params = Object.entries(r.params ?? {});
-      row('parameters', params.length ? params.map(([k, x]) => `${k}=${fmtScalar(x)}`).join(', ') : 'all defaults');
+      row('parameters', params.length ? params.map(([k, x]) => `${k}=${fmtPy(x)}`).join(', ') : 'all defaults');
       for (const [k, x] of Object.entries(r.facts ?? {})) row(k, show(x));
       row('fitted', r.fitted ? (r.fittedAttrs?.length ? r.fittedAttrs.join(', ') : 'yes') : 'no: call .fit(X, y) first');
     } else if (r.kind === 'model') {
@@ -484,18 +491,19 @@ export class VariablesView {
       if (node?.kind === 'ndarray' && (node.rows || node.value !== undefined)) {
         this.arrayDetail(node, cell);
       } else if (node?.items) {
-        cell.appendChild(h('div', { class: 'chips' }, ...node.items.slice(0, 100).map((it, i) => h('span', { class: 'chip', title: `[${i}]` }, fmtScalar(it, heap)))));
+        cell.appendChild(h('div', { class: 'chips' }, ...node.items.slice(0, 100).map((it, i) => h('span', { class: 'chip', title: `[${i}]` }, fmtPy(it, heap)))));
         if ((node.len ?? 0) > node.items.length) cell.appendChild(h('span', { class: 'muted' }, ` … ${node.len! - node.items.length} more`));
       } else if (node?.entries) {
         const t = h('table', { class: 'kv' });
-        for (const [k, val] of node.entries.slice(0, 100)) t.appendChild(h('tr', {}, h('th', {}, fmtScalar(k, heap)), h('td', {}, fmtScalar(val, heap))));
+        for (const [k, val] of node.entries.slice(0, 100)) t.appendChild(h('tr', {}, h('th', {}, fmtPy(k, heap)), h('td', {}, fmtPy(val, heap))));
         cell.appendChild(t);
+        if ((node.len ?? 0) > node.entries.length) cell.appendChild(h('span', { class: 'muted' }, `… ${node.len! - node.entries.length} more keys`));
       } else if (node?.fields) {
         const t = h('table', { class: 'kv' });
-        for (const [k, val] of node.fields) t.appendChild(h('tr', {}, h('th', {}, k), h('td', {}, fmtScalar(val, heap))));
+        for (const [k, val] of node.fields) t.appendChild(h('tr', {}, h('th', {}, k), h('td', {}, fmtPy(val, heap))));
         cell.appendChild(t);
       } else {
-        cell.appendChild(h('pre', { class: 'console small' }, fmtScalar(r.value ?? root, heap)));
+        cell.appendChild(h('pre', { class: 'console small' }, fmtPy(r.value ?? root, heap)));
       }
       if (r.truncated) cell.appendChild(h('p', { class: 'muted' }, 'Large structure: only part of it is shown.'));
     } catch (e) {

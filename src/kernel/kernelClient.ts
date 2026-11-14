@@ -105,6 +105,11 @@ export class KernelClient {
       ...(opts.env ?? process.env),
       PYTHONUNBUFFERED: '1',
       PYTHONIOENCODING: 'utf-8',
+      // UTF-8 mode: open(), csv, json and Path.read_text default to UTF-8,
+      // the encoding VS Code saves files in. Without it Windows uses its code
+      // page (cp1252: UnicodeDecodeError 'charmap'; cp1258: silently garbled
+      // Vietnamese). Python 3.15 makes this the default (PEP 686).
+      PYTHONUTF8: '1',
       MPLBACKEND: 'Agg',
     };
     // argv array + shell:false: the interpreter path is never parsed by a shell.

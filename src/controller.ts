@@ -7,16 +7,20 @@ import { LiveScheduler } from './exec/liveScheduler';
 import { MAX_PROGRAM_INPUT_CHARS, inputPathFor, isInputOf, samePath } from './exec/programInput';
 import { KernelClient } from './kernel/kernelClient';
 import {
+  ExecuteParams,
   ExecuteResult,
   KernelRequestError,
   KernelStatus,
   RequestType,
+  TraceParams,
   TraceResult,
   VariablesList,
 } from './kernel/protocol';
 import { resolvePython } from './kernel/pythonResolver';
+import { cellsAbove, lensLine, nextCellLine, preludeFor } from './ui/cellLensModel';
 import { EditorDecorations } from './ui/editorDecorations';
 import { InspectorPanel, PanelTab } from './ui/panel';
+import { statementAt } from './ui/statements';
 import { WEBVIEW_COMMAND_IDS, WebviewMessage } from './ui/validate';
 
 type Mode = 'manual' | 'live';
@@ -25,6 +29,25 @@ type Feature = 'visualizer' | 'dataframe';
 interface TraceContext {
   uri: vscode.Uri;
   lineOffset: number;
+}
+
+/** What a trace covers: the selection or cursor cell, a given cell, or the whole file. */
+type TraceWant = { kind: 'auto' } | { kind: 'cell'; line: number } | { kind: 'file' };
+
+interface TraceScope {
+  code: string;
+  lineOffset: number;
+  label: string;
+  prelude?: string;
+}
+
+/** The document (and cell line) a cell command acts on. */
+interface CommandTarget {
+  doc: vscode.TextDocument;
+  editor: vscode.TextEditor | undefined;
+  line: number;
+  /** The line came from the command's arguments (a CodeLens), not the cursor. */
+  explicitLine: boolean;
 }
 
 const cfg = () => vscode.workspace.getConfiguration('vrun');
@@ -176,8 +199,8 @@ export class VrunController implements vscode.Disposable {
     const resource = doc?.uri;
     const pythonPath = await resolvePython(resource, (t) => this.output.append(t));
     let cwd = os.homedir();
-    if (doc && doc.uri.scheme === 'file') cwd = path.dirname(doc.uri.fsPath);
-    else if (vscode.workspace.workspaceFolders?.length) cwd = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    if (doc && doc.uri.scheme === 'file') cwd = displayFolder(path.dirname(doc.uri.fsPath));
+    else if (vscode.workspace.workspaceFolders?.length) cwd = displayFolder(vscode.workspace.workspaceFolders[0].uri.fsPath);
     this.output.appendLine(`[pylive] starting kernel: ${pythonPath} (cwd ${cwd})`);
     return {
       pythonPath,
@@ -280,6 +303,39 @@ export class VrunController implements vscode.Disposable {
     return doc.uri.scheme === 'file' ? doc.uri.fsPath : `<${path.basename(doc.uri.path) || 'untitled'}>`;
   }
 
+  /**
+   * Folder of a saved file, sent with every run and trace so that
+   * `open("data.csv")` finds the file next to the script even when the
+   * kernel was started from another folder. Untitled buffers have none.
+   */
+  private docFolder(doc: vscode.TextDocument): string | undefined {
+    return doc.uri.scheme === 'file' ? displayFolder(path.dirname(doc.uri.fsPath)) : undefined;
+  }
+
+  /**
+   * What a cell command acts on. A CodeLens passes (uri, line, marker text)
+   * of its cell and the editor title / context menus pass the editor's uri;
+   * keybindings, the palette and the inspector's buttons pass nothing and
+   * use the cursor of the current editor.
+   */
+  private commandTarget(args: readonly unknown[]): CommandTarget | undefined {
+    const [uri, line, marker] = args;
+    if (uri instanceof vscode.Uri) {
+      const key = uri.toString();
+      const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === key);
+      if (!doc || doc.isClosed) return undefined;
+      const editor = vscode.window.visibleTextEditors.find((ed) => ed.document === doc);
+      if (typeof line === 'number' && Number.isInteger(line) && line >= 0 && line < doc.lineCount) {
+        const at = typeof marker === 'string' ? lensLine(doc.getText(), line, marker) : line;
+        return { doc, editor, line: at, explicitLine: true };
+      }
+      return { doc, editor, line: editor?.selection.active.line ?? 0, explicitLine: false };
+    }
+    const editor = this.targetEditor();
+    if (!editor) return undefined;
+    return { doc: editor.document, editor, line: editor.selection.active.line, explicitLine: false };
+  }
+
   async runSelection(): Promise<void> {
     const editor = this.targetEditor();
     if (!editor) return;
@@ -297,15 +353,74 @@ export class VrunController implements vscode.Disposable {
     await this.runCode(doc, dedent(text), startLine, 'manual', `line ${startLine + 1}`, startLine + text.split('\n').length - 1);
   }
 
-  async runCell(): Promise<void> {
-    const editor = this.targetEditor();
-    if (!editor) return;
-    const doc = editor.document;
-    const cell = cellAt(doc.getText(), editor.selection.active.line);
+  async runCell(args: readonly unknown[] = []): Promise<void> {
+    const t = this.commandTarget(args);
+    if (!t) return;
+    const cell = cellAt(t.doc.getText(), t.line);
+    if (cell) await this.runOneCell(t.doc, cell);
+  }
+
+  /**
+   * Shift+Enter in Colab and Jupyter: run the cell and go to the next one.
+   * The cursor moves before the run finishes, so pressing it again queues
+   * the next cell (the kernel runs requests in order).
+   * A file without `# %%` lines runs statement by statement instead, like
+   * the Python extension's Shift+Enter: as one cell, every press would
+   * re-run the whole script, data loading and training included.
+   */
+  async runCellAndAdvance(args: readonly unknown[] = []): Promise<void> {
+    const t = this.commandTarget(args);
+    if (!t) return;
+    const text = t.doc.getText();
+    if (!hasCellMarkers(text)) {
+      const st = statementAt(text, t.line);
+      if (!st) return;
+      this.moveCursor(t.editor, st.nextLine);
+      await this.runCode(t.doc, dedent(st.text), st.startLine, 'manual', `line ${st.startLine + 1}`, st.endLine);
+      return;
+    }
+    const cell = cellAt(text, t.line);
     if (!cell) return;
+    this.moveCursor(t.editor, nextCellLine(text, t.line));
+    await this.runOneCell(t.doc, cell);
+  }
+
+  /** Put the cursor at the start of `line` (nothing when there is no next line to go to). */
+  private moveCursor(editor: vscode.TextEditor | undefined, line: number | undefined): void {
+    if (line === undefined || !editor) return;
+    const pos = new vscode.Position(line, 0);
+    editor.selection = new vscode.Selection(pos, pos);
+    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  }
+
+  /**
+   * Run every cell above the current one, in order: after Restart Kernel or
+   * reopening VS Code this brings back what the current cell needs.
+   */
+  async runCellsAbove(args: readonly unknown[] = []): Promise<void> {
+    const t = this.commandTarget(args);
+    if (!t) return;
+    // The cells as they are now; edits made while they run do not change the plan.
+    const cells = cellsAbove(t.doc.getText(), t.line);
+    if (cells.length === 0) {
+      void vscode.window.showInformationMessage('vrun: there is no code in cells above this one (cells start with a "# %%" line).');
+      return;
+    }
+    for (const cell of cells) {
+      const r = await this.runOneCell(t.doc, cell);
+      // Later cells usually need what this one defines: stop at the first
+      // cell that did not finish (error, Stop, a declined re-training).
+      if (!r || r.status !== 'ok' || r.interrupted) {
+        void vscode.window.setStatusBarMessage(`vrun: Run Above stopped at the cell at line ${cell.startLine + 1}`, 6000);
+        return;
+      }
+    }
+  }
+
+  private runOneCell(doc: vscode.TextDocument, cell: Cell): Promise<ExecuteResult | undefined> {
     // Shown next to the file name in the Output log, so keep it short.
     const label = hasCellMarkers(doc.getText()) ? `cell · line ${cell.startLine + 1}` : '';
-    await this.runCode(doc, cell.text, cell.startLine, 'manual', label, cell.endLine);
+    return this.runCode(doc, cell.text, cell.startLine, 'manual', label, cell.endLine);
   }
 
   async runFile(): Promise<void> {
@@ -336,13 +451,15 @@ export class VrunController implements vscode.Disposable {
     const execId = ++this.execCounter;
     // `file` is for display; `docKey` identifies the document (two files may share a basename).
     this.panel.post({ type: 'execStart', execId, label, mode, file: path.basename(doc.fileName), docKey: doc.uri.toString() });
-    const params: Record<string, unknown> = {
+    const params: ExecuteParams = {
       code,
       file: this.fileLabel(doc),
       lineOffset,
       mode,
       execId,
     };
+    const cwd = this.docFolder(doc);
+    if (cwd !== undefined) params.cwd = cwd;
     if (mode === 'live') params.timeoutMs = cfg().get<number>('live.timeoutMs', 5000);
     else params.confirmAfterMs = Math.max(0, cfg().get<number>('safeMl.confirmAfterSeconds', 5)) * 1000;
     const stdin = this.programInput(doc);
@@ -688,30 +805,66 @@ export class VrunController implements vscode.Disposable {
 
   // ------------------------------------------------------------ visualizer
 
-  async visualize(): Promise<void> {
+  async visualize(args: readonly unknown[] = []): Promise<void> {
     if (!(await this.featureEnabled('visualizer'))) return;
-    const doc = this.targetEditor()?.document;
-    if (!doc) return;
+    const t = this.commandTarget(args);
+    if (!t) return;
     this.panel.reveal('visualizer', true);
-    await this.traceDocument(doc, 'manual', undefined);
+    // A CodeLens names its cell, whatever is selected; otherwise follow the
+    // selection or the cursor.
+    await this.traceDocument(t.doc, 'manual', undefined, t.explicitLine ? { kind: 'cell', line: t.line } : { kind: 'auto' });
   }
 
-  private traceScope(doc: vscode.TextDocument): { code: string; lineOffset: number; label: string } {
-    const editor = vscode.window.visibleTextEditors.find((ed) => ed.document === doc);
-    const sel = editor?.selection;
-    if (sel && !sel.isEmpty) {
-      return { code: dedent(doc.getText(selectionRange(doc, sel))), lineOffset: sel.start.line, label: `selection (line ${sel.start.line + 1})` };
-    }
+  /** The whole document, ignoring cells and the selection. */
+  async visualizeFile(args: readonly unknown[] = []): Promise<void> {
+    if (!(await this.featureEnabled('visualizer'))) return;
+    const t = this.commandTarget(args);
+    if (!t) return;
+    this.panel.reveal('visualizer', true);
+    await this.traceDocument(t.doc, 'manual', undefined, { kind: 'file' });
+  }
+
+  /** The document of the trace the panel shows, while it is still open. */
+  private lastTracedDocument(): vscode.TextDocument | undefined {
+    const key = this.lastTrace?.uri.toString();
+    if (key === undefined) return undefined;
+    return vscode.workspace.textDocuments.find((d) => !d.isClosed && d.uri.toString() === key);
+  }
+
+  private traceScope(doc: vscode.TextDocument, want: TraceWant): TraceScope {
     const text = doc.getText();
-    if (hasCellMarkers(text) && editor) {
-      const cell = cellAt(text, editor.selection.active.line);
-      if (cell) return { code: cell.text, lineOffset: cell.startLine, label: `cell at line ${cell.startLine + 1}` };
+    const whole: TraceScope = { code: text, lineOffset: 0, label: path.basename(doc.fileName) };
+    if (want.kind === 'file') return whole;
+    let line: number | undefined;
+    if (want.kind === 'cell') {
+      line = want.line;
+    } else {
+      const editor = vscode.window.visibleTextEditors.find((ed) => ed.document === doc);
+      const sel = editor?.selection;
+      if (sel && !sel.isEmpty) {
+        return { code: dedent(doc.getText(selectionRange(doc, sel))), lineOffset: sel.start.line, label: `selection (line ${sel.start.line + 1})` };
+      }
+      line = editor?.selection.active.line;
     }
-    return { code: text, lineOffset: 0, label: path.basename(doc.fileName) };
+    if (line !== undefined && hasCellMarkers(text)) {
+      const cell = cellAt(text, line);
+      if (cell) {
+        // A cell is traced in a fresh namespace: the functions, imports and
+        // constants of the cells above come along (the kernel keeps only
+        // what is safe to re-run), or using them would be a NameError.
+        return { code: cell.text, lineOffset: cell.startLine, label: `cell at line ${cell.startLine + 1}`, prelude: preludeFor(text, cell.startLine) };
+      }
+    }
+    return whole;
   }
 
-  private async traceDocument(doc: vscode.TextDocument, mode: Mode, isCurrent: (() => boolean) | undefined): Promise<void> {
-    const scope = this.traceScope(doc);
+  private async traceDocument(
+    doc: vscode.TextDocument,
+    mode: Mode,
+    isCurrent: (() => boolean) | undefined,
+    want: TraceWant = { kind: 'auto' },
+  ): Promise<void> {
+    const scope = this.traceScope(doc, want);
     if (!scope.code.trim()) return;
     if (mode === 'live' && !this.kernel.isRunning) return; // live work never starts a kernel
     try {
@@ -722,15 +875,19 @@ export class VrunController implements vscode.Disposable {
     const execId = ++this.execCounter;
     const stdin = this.programInput(doc);
     this.panel.post({ type: 'traceStart', execId, label: scope.label, mode });
+    const params: TraceParams = {
+      code: scope.code,
+      mode,
+      execId,
+      maxSteps: cfg().get<number>('trace.maxSteps', 5000),
+      timeoutMs: cfg().get<number>('trace.timeoutMs', 15000),
+    };
+    if (stdin !== undefined) params.stdin = stdin;
+    const cwd = this.docFolder(doc);
+    if (cwd !== undefined) params.cwd = cwd;
+    if (scope.prelude !== undefined) params.prelude = scope.prelude;
     try {
-      const result = await this.kernel.request<TraceResult>('trace', {
-        code: scope.code,
-        mode,
-        execId,
-        maxSteps: cfg().get<number>('trace.maxSteps', 5000),
-        timeoutMs: cfg().get<number>('trace.timeoutMs', 15000),
-        ...(stdin !== undefined ? { stdin } : {}),
-      });
+      const result = await this.kernel.request<TraceResult>('trace', params);
       if (isCurrent && !isCurrent()) {
         // A newer edit superseded this trace; let the UI drop its "Tracing…" state.
         this.panel.post({ type: 'traceSuperseded', execId });
@@ -824,9 +981,13 @@ export class VrunController implements vscode.Disposable {
         if (this.lastVariables) this.panel.post({ type: 'variables', list: this.lastVariables });
         this.postLiveState();
         return;
-      case 'command':
-        await vscode.commands.executeCommand(WEBVIEW_COMMAND_IDS[msg.command]);
+      case 'command': {
+        // The panel's "Visualize whole file" sits under a trace's notes: it
+        // means that trace's file, even if another Python file is in front now.
+        const traced = msg.command === 'visualizeFile' ? this.lastTracedDocument() : undefined;
+        await vscode.commands.executeCommand(WEBVIEW_COMMAND_IDS[msg.command], ...(traced ? [traced.uri] : []));
         return;
+      }
       case 'refreshVariables':
         await this.refreshVariables();
         return;
@@ -943,6 +1104,15 @@ export class VrunController implements vscode.Disposable {
     this.kernel.dispose();
     for (const d of this.disposables) d.dispose();
   }
+}
+
+/**
+ * VS Code's fsPath writes the Windows drive letter in lower case; the kernel
+ * shows this folder to the learner ("working folder: C:\..."), so write it
+ * the way Explorer and os.getcwd() do.
+ */
+function displayFolder(folder: string): string {
+  return folder.replace(/^([a-z]):(?=[\\/])/, (_m, d: string) => `${d.toUpperCase()}:`);
 }
 
 function formatSeconds(ms: number): string {

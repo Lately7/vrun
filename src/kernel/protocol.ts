@@ -101,20 +101,53 @@ export interface TraceFrame {
   fid?: number;
   /** Parameter names, on the first step of the call only. */
   params?: string[];
+  /** Qualified name when it differs from func (Trie.__init__), first step only. */
+  qual?: string;
+  /** A class body: runs like a call, but is not one. First step only. */
+  body?: boolean;
+  /** Id of the code object (recursion: calls of the same code). First step only. */
+  code?: number;
 }
 
 export interface TraceStep {
   line: number;
   event: 'line' | 'return' | 'exception';
-  stack: TraceFrame[];
+  /**
+   * Outermost frame first. With TraceResult.stackRuns, a number n stands for
+   * n frames that are the same as at those positions of the previous step.
+   */
+  stack: Array<TraceFrame | number>;
   /** With TraceResult.heapDelta: only the nodes that changed since they were last sent. */
   heap: Record<string, HeapNode>;
   /** Heap ids no longer sent (over the node cap): drop their older copies. */
   gone?: string[];
   out: number;
+  /** On a return step: the returned (or, with yield, the yielded) value. */
   ret?: Encoded;
+  /** A generator suspended at a yield; the call goes on later. */
+  yield?: boolean;
+  /** On a return step: the call ended by this exception, it did not return. */
+  raised?: string;
   exc?: string;
   truncated?: boolean;
+}
+
+/**
+ * A trace that hit a limit after the program came back to a state it had
+ * been in before: almost certainly an endless loop, which more steps
+ * cannot fix.
+ */
+export interface TraceLoop {
+  /** Step index where the repeated state was first seen. */
+  first: number;
+  /** Step index where it came back. */
+  repeat: number;
+  /** Line (in the traced code) of the repeated state. */
+  line: number;
+  /** The values that did not change between the two steps. */
+  values: Array<[string, Encoded]>;
+  /** The loop printed the same output on each pass (output does not change what it does next). */
+  prints?: boolean;
 }
 
 export interface TraceResult {
@@ -122,6 +155,8 @@ export interface TraceResult {
   steps: TraceStep[];
   /** Steps carry heap deltas; the full heap of step k is steps[0..k] applied in order. */
   heapDelta?: boolean;
+  /** Steps' stacks may contain runs of unchanged frames (see TraceStep.stack). */
+  stackRuns?: boolean;
   stopped: string | null;
   error: ErrorInfo | null;
   stdout: string;
@@ -129,7 +164,51 @@ export interface TraceResult {
   elapsedMs?: number;
   source?: string;
   analysis?: Analysis;
+  /** Notes for the run header, e.g. names taken from the cells above or a folder change. */
+  notes?: string[];
+  /** Set with `stopped` when the limit was hit inside a likely endless loop. */
+  loop?: TraceLoop;
 }
+
+/**
+ * Parameters of `execute`. A type alias (not an interface) so it is
+ * assignable to the client's Record<string, unknown> parameter.
+ */
+export type ExecuteParams = {
+  code: string;
+  /** Shown in tracebacks; the absolute path for a saved file. */
+  file?: string;
+  lineOffset?: number;
+  mode?: 'manual' | 'live';
+  execId?: number;
+  timeoutMs?: number;
+  confirmAfterMs?: number;
+  stdin?: string;
+  force?: boolean;
+  /**
+   * Folder of the saved file the code comes from (absent for untitled
+   * buffers). The kernel moves its working folder there unless the code
+   * changed it itself, so `open("data.csv")` finds the file next to it.
+   */
+  cwd?: string;
+};
+
+/** Parameters of `trace` (see ExecuteParams for why this is a type alias). */
+export type TraceParams = {
+  code: string;
+  mode?: 'manual' | 'live';
+  execId?: number;
+  maxSteps?: number;
+  timeoutMs?: number;
+  stdin?: string;
+  cwd?: string;
+  /**
+   * Text of every line above the traced cell of a `# %%` file. The tracer
+   * runs only its definitions, imports and simple literal assignments
+   * (untraced), so a cell can use what the setup cell defines.
+   */
+  prelude?: string;
+};
 
 export interface VariableInfo {
   name: string;

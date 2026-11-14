@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from conftest import full_heap
+from conftest import full_heap, full_stacks
 from pylive_kernel import safety, tracer
 
 BUBBLE = """
@@ -36,7 +36,7 @@ def test_trace_records_steps_and_final_state():
 def test_trace_function_frames_and_return_values():
     code = "def fact(n):\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)\nr = fact(4)\n"
     res = tracer.run_trace(code)
-    depths = [len(s["stack"]) for s in res["steps"]]
+    depths = [len(s) for s in full_stacks(res)]
     assert max(depths) == 5  # <module> + 4 recursive frames
     returns = [s["ret"] for s in res["steps"] if s["event"] == "return" and s["stack"][-1]["func"] == "fact"]
     assert returns == [1, 2, 6, 24]
@@ -100,6 +100,33 @@ def test_trace_does_not_touch_sys_stdout():
 def test_trace_size_limit():
     res = tracer.run_trace("big = list(range(60))\nfor i in range(10000):\n    big[0] = i\n", max_bytes=20_000)
     assert res["stopped"] and "size limit" in res["stopped"]
+
+
+def test_trace_frozen_loop_under_a_bare_except_is_reported_and_still_limited():
+    code = "lo, hi = 0, 1\nwhile lo < hi:\n    try:\n        mid = (lo + hi) // 2\n    except:\n        pass\n"
+    res = tracer.run_trace(code, max_steps=300)
+    assert len(res["steps"]) == 300 and res["loop"]["line"] in (2, 3, 4)
+    assert res["stopped"].startswith("looks like an endless loop") and res["stopped"].endswith("step limit (300) reached")
+
+
+def test_trace_counting_loop_is_not_called_endless():
+    res = tracer.run_trace("i = 0\nwhile True:\n    i += 1\n", max_steps=50)
+    assert "loop" not in res and res["stopped"] == "step limit (50) reached"
+
+
+def test_prelude_never_runs_file_or_training_code(tmp_path):
+    victim = tmp_path / "keep.txt"
+    victim.write_text("x")
+    above = (f"import os\npath = {str(victim)!r}\nos.remove(path)\nopen(path, 'w').write('gone')\n"
+             "def wipe():\n    os.remove(path)\nwiped = wipe()\nmodel.fit(X, y)\nn = 3\n")
+    res = tracer.run_trace("print(n, path)\nprint(wiped)\n", prelude=above)
+    assert victim.read_text() == "x"
+    assert res["stdout"] == f"3 {victim}\n" and res["error"]["ename"] == "NameError"
+
+
+def test_prelude_output_is_not_part_of_the_trace():
+    res = tracer.run_trace("print(helper())\n", prelude="print('setup')\ndef helper():\n    print('inside')\n    return 1\n")
+    assert res["stdout"] == "inside\n1\n"  # the call from the traced cell prints; the setup print is gone
 
 
 # -- safety --------------------------------------------------------------

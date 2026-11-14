@@ -28,9 +28,12 @@
       { "command": "vrun.stopKernel", "title": "Stop Kernel", "category": "vrun", "icon": "$(debug-stop)" },
       { "command": "vrun.runSelection", "title": "Run Selection", "category": "vrun" },
       { "command": "vrun.runCell", "title": "Run Cell", "category": "vrun", "icon": "$(play-circle)" },
+      { "command": "vrun.runCellAndAdvance", "title": "Run Cell and Go to Next Cell", "category": "vrun" },
+      { "command": "vrun.runCellsAbove", "title": "Run Cells Above", "category": "vrun" },
       { "command": "vrun.runFile", "title": "Run File", "category": "vrun", "icon": "$(run-all)" },
       { "command": "vrun.toggleLiveMode", "title": "Toggle Live Mode", "category": "vrun" },
       { "command": "vrun.visualize", "title": "Visualize Algorithm (step-by-step trace)", "category": "vrun", "icon": "$(graph)" },
+      { "command": "vrun.visualizeFile", "title": "Visualize File (whole file, all cells)", "category": "vrun", "icon": "$(graph-line)" },
       { "command": "vrun.toggleLiveVisualize", "title": "Toggle Live Visualize (DSA)", "category": "vrun" },
       { "command": "vrun.openVariables", "title": "Open Variable Explorer", "category": "vrun" },
       { "command": "vrun.openDataFrame", "title": "Open DataFrame Viewer", "category": "vrun" },
@@ -47,17 +50,24 @@
       { "command": "vrun.runSelection", "key": "ctrl+alt+enter", "mac": "cmd+alt+enter", "when": "editorTextFocus && editorLangId == python" },
       { "command": "vrun.runCell", "key": "ctrl+alt+c", "mac": "cmd+alt+c", "when": "editorTextFocus && editorLangId == python" },
       { "command": "vrun.visualize", "key": "ctrl+alt+v", "mac": "cmd+alt+v", "when": "editorTextFocus && editorLangId == python" },
-      { "command": "vrun.interrupt", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorLangId == python" }
+      { "command": "vrun.interrupt", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorLangId == python" },
+      { "command": "vrun.runCellAndAdvance", "key": "shift+enter", "when": "config.vrun.shiftEnterRunsCell && editorTextFocus && editorLangId == python && !editorHasSelection && !suggestWidgetVisible && !findInputFocussed && !replaceInputFocussed && !notebookEditorFocused && !isCompositeNotebook" },
+      { "command": "vrun.runSelection", "key": "shift+enter", "when": "config.vrun.shiftEnterRunsCell && editorTextFocus && editorLangId == python && editorHasSelection && !suggestWidgetVisible && !findInputFocussed && !replaceInputFocussed && !notebookEditorFocused && !isCompositeNotebook" },
+      { "command": "vrun.runCell", "key": "ctrl+enter", "when": "config.vrun.shiftEnterRunsCell && jupyter.hascodecells && editorTextFocus && editorLangId == python && !editorHasSelection && !suggestWidgetVisible && !findInputFocussed && !replaceInputFocussed && !notebookEditorFocused && !isCompositeNotebook" }
     ],
     "menus": {
       "editor/title": [
         { "command": "vrun.runCell", "when": "editorLangId == python", "group": "navigation@1" },
-        { "command": "vrun.visualize", "when": "editorLangId == python && config.vrun.features.visualizer", "group": "navigation@2" }
+        { "command": "vrun.visualize", "when": "editorLangId == python && config.vrun.features.visualizer", "group": "navigation@2" },
+        { "command": "vrun.runCellsAbove", "when": "editorLangId == python", "group": "vrun@1" },
+        { "command": "vrun.visualizeFile", "when": "editorLangId == python && config.vrun.features.visualizer", "group": "vrun@2" }
       ],
       "editor/context": [
         { "command": "vrun.runSelection", "when": "editorLangId == python && editorHasSelection", "group": "pylive@1" },
         { "command": "vrun.runCell", "when": "editorLangId == python", "group": "pylive@2" },
-        { "command": "vrun.visualize", "when": "editorLangId == python && config.vrun.features.visualizer", "group": "pylive@3" }
+        { "command": "vrun.runCellsAbove", "when": "editorLangId == python", "group": "pylive@3" },
+        { "command": "vrun.visualize", "when": "editorLangId == python && config.vrun.features.visualizer", "group": "pylive@4" },
+        { "command": "vrun.visualizeFile", "when": "editorLangId == python && config.vrun.features.visualizer", "group": "pylive@5" }
       ]
     },
     "configuration": {
@@ -85,6 +95,18 @@
           "default": "values",
           "order": 2,
           "description": "Results shown inline in the editor after a run. Notes disappear when you edit their line."
+        },
+        "vrun.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "order": 3,
+          "markdownDescription": "Show **Run Cell | Run Above | Visualize** above every `# %%` cell line of a Python file (Visualize only when `#vrun.features.visualizer#` is on)."
+        },
+        "vrun.shiftEnterRunsCell": {
+          "type": "boolean",
+          "default": false,
+          "order": 4,
+          "markdownDescription": "**Shift+Enter** runs the current cell in vrun and moves to the next cell, like Colab and Jupyter (with a selection: runs the selection). In a file without `# %%` lines it runs the statement at the cursor (a whole `def`, `for` or `if` block) and moves to the next statement, as the Python extension's Shift+Enter does. With the Jupyter extension installed, **Ctrl+Enter** in a `# %%` file also runs the cell in vrun instead of Jupyter's Interactive Window (without Jupyter, Ctrl+Enter keeps inserting a line). Off by default because the Python extension uses Shift+Enter to run the line in a terminal, and the Jupyter extension uses Shift+Enter and Ctrl+Enter for its Interactive Window; when this is on, vrun's keys take precedence over theirs."
         },
         "vrun.pythonPath": {
           "type": "string",

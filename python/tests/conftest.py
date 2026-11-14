@@ -31,6 +31,23 @@ def full_heap(result: dict[str, Any], k: int = -1) -> dict[str, Any]:
     return heap
 
 
+def full_stacks(result: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    """The complete stack of every step: in a step's stack, a number n stands
+    for n frames unchanged at the same positions since the previous step."""
+    stacks: list[list[dict[str, Any]]] = []
+    prev: list[dict[str, Any]] = []
+    for step in result["steps"]:
+        full: list[dict[str, Any]] = []
+        for x in step["stack"]:
+            if isinstance(x, int):
+                full.extend(prev[len(full):len(full) + x])
+            else:
+                full.append(x)
+        stacks.append(full)
+        prev = full
+    return stacks
+
+
 class KernelProc:
     def __init__(self, cwd: str | None = None, new_session: bool = False) -> None:
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", MPLBACKEND="Agg")

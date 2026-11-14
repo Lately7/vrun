@@ -102,6 +102,18 @@ describe('KernelClient (real Python)', () => {
     assert.equal(k.status, 'idle');
   });
 
+  it('starts Python in UTF-8 mode even when the parent turns it off', async () => {
+    // open()/csv/json must read the UTF-8 files VS Code saves, whatever the Windows code page.
+    const k2 = new KernelClient();
+    await k2.start({ ...opts, env: { ...process.env, PYTHONUTF8: '0' } });
+    try {
+      const r = await k2.request<ExecuteResult>('execute', { code: 'import sys, locale\n(sys.flags.utf8_mode, locale.getpreferredencoding(False))' });
+      assert.equal(r.value?.repr, "(1, 'utf-8')");
+    } finally {
+      await k2.stop();
+    }
+  });
+
   it('fails clearly for a missing interpreter', async () => {
     const k2 = new KernelClient();
     await assert.rejects(k2.start({ ...opts, pythonPath: 'definitely-not-python-xyz' }), /Could not start Python|exited/);

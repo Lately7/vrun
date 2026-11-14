@@ -1,5 +1,157 @@
 # Changelog
 
+## Unreleased — fixes from a beginner review
+
+Seventeen problems that learners of Python, ML and algorithms hit first.
+
+### Added
+* **Run Cell | Run Above | Visualize** links above every `# %%` line
+  (`vrun.codeLens`); *Run Cell and Go to Next Cell*, *Run Cells Above*,
+  *Visualize File* (whole file, all cells). Opt-in Shift+Enter
+  (`vrun.shiftEnterRunsCell`; with the Jupyter extension it also takes
+  Ctrl+Enter in `# %%` files). When the Jupyter extension is present, a
+  one-time notice explains that its Run Cell runs in a separate Python and
+  offers to give Run Cell and the keys to vrun, or only hide Jupyter's links.
+* Visualize on a cell brings in what the cell needs from the cells above
+  (definitions, plain values, imports of modules already imported, calls of
+  your own helpers that only compute; never files, input, data loading,
+  training or a first import), also for names the cell reassigns; the run
+  header lists what it used and what it skipped. A NameError for a value an
+  earlier cell computes offers *Visualize whole file*.
+* Likely **endless loops** are named when a trace reaches its limit (also
+  when the loop prints), with buttons to jump to the two identical steps;
+  the maxSteps hint shows only for a plain step limit.
+* **Recursive calls only**: helper calls that never recurse fold into a
+  `+4 safe()` badge on the caller (on by default when helpers make more than
+  3 calls). A RecursionError says how deep the function went and how its
+  argument changed.
+* Error hints: an off-by-one IndexError names the index, its value, the
+  length and the loop bound to fix (a different list of another length,
+  rows vs columns, a missing base case in recursion, pop from an empty
+  stack); a file not found next to the script, misspelled file names,
+  backslash paths; a module name in the wrong case; a module edited after
+  import (`mod.f` and `from mod import f`); a built-in name you rebound;
+  Excel / ANSI encodings (cp1258 only for Vietnamese tone marks).
+* Variables tag names that hide a built-in (*shadows built-in*).
+
+### Changed
+* Runs and traces work in the folder of the file being run (data files,
+  `import helpers`, a lesson's own `utils.py`; an `os.chdir` of yours is
+  kept), with a `working folder: …` note when it changes.
+* Your own modules are reloaded from their own folder before Run Cell and
+  Visualize after you edit them, also names taken with `from x import f`;
+  a reloaded class keeps its identity, so objects made earlier run the new
+  methods and `isinstance` keeps working.
+* The kernel runs Python in UTF-8 mode (`PYTHONUTF8=1`): `open()`, `csv`,
+  `json`, `Path.read_text` use UTF-8, like VS Code.
+* Trace caps raised from 64 items / 150 objects to 512 / 1000; tuples are
+  sent once, unchanged containers and objects are reused (BFS on a 40×40
+  grid traces in 2 s instead of 14 s, an LCS table in 2 s instead of 13.6 s).
+  Sets of plain values are sorted, and every view says what was cut
+  (`… 188 more not shown`, `j=650 (beyond the 512 shown)`, `not shown: too
+  many objects`).
+* Strings are quoted in Variables and in the visualizer, a deque reads
+  `deque([...])`, a list of strings says *list of str*; stacks, queues and
+  heaps of nodes or tuples show their values, and nodes waiting in them are
+  outlined in their tree or list.
+* Doubly linked lists draw `prev` links; a link still broken after the
+  list's own method returns is red and explained (while the method runs it
+  reads *not linked yet*); `dll.head` / `self.tail` label their nodes.
+
+### Fixed
+* Error summaries dropped Python's *Did you mean ...?* suggestion; error
+  squiggles sat to the right on lines with Vietnamese text.
+* `open()` on a UTF-8 file failed with `'charmap' codec can't decode`, or
+  read Vietnamese garbled, on Windows code pages.
+* `pd.read_csv("data.csv")` next to a script in a subfolder was not found.
+* Live Mode under pandas 3 rewound to `read_csv` in every cell that writes
+  or trains; it now stops at that line.
+* Live Mode re-created a model, optimizer or history trained by an earlier
+  Run Cell (also histories filled by a helper); a `time.sleep` animation loop
+  or a recomputed loss tensor no longer blocks Live.
+* Visualize on a cell failed with NameError for functions of the cells above.
+* An edited module kept running its old code until Restart Kernel.
+* `max = 0` or `input = sys.stdin.readline` from one exercise broke the next.
+* A RecursionError made the visualizer page about 100,000 px tall;
+  `<genexpr>` frames doubled the recursion tree; "N of N calls drawn"
+  appeared when nothing was left out.
+* The out-of-range subscript was dropped from the values row; an error from
+  a called function no longer marks the caller's subscripts red.
+* Module-level errors read "leaving the function"; they read "(program
+  stopped)".
+* Visualize hung when a bare `except:` caught the trace's limit, or when a
+  function from the cells above looped forever; Visualize no longer reseeds
+  the kernel's random numbers.
+* Long containers and big ints were cut without saying so (`memo[299]`
+  showed 8 digits of a 63-digit number).
+
+## Unreleased — practising DSA
+
+### Added
+* Visualizer: **recursion tree** (calls with arguments and returned values,
+  the stack highlighted, click to jump); **step over** (↓) / **step out**
+  (↑); click a code line to run to it; how often each line ran; the values
+  of the subscripts on the line about to run (`arr[j] = 5`).
+* **Animation** between steps: swaps slide, pointers move, heap values sift,
+  nodes move to their new place, new ones fade in, changed values flash.
+  ✦ Animate toggles it; it is off with the OS "reduce motion" setting.
+* New drawings: strings as character cells, ranges between `lo..hi` /
+  `left..right`, `visited` / `queue` cells on grids, tries (objects and
+  nested dicts), union-find forests, edge lists as graphs, level-order
+  lists as trees, LCS / edit-distance headers, the current edge `u → v`.
+* Practice files: sorting and searching, recursion and backtracking, graphs
+  and grids, data structures — each with exercises.
+
+### Changed
+* Pointer arrows come from the frame that holds the array and only from
+  names the code uses to index or bound it (no outer `mid` on an inner
+  array, no `i` on a list it never indexes).
+* Graphs keep their vertex positions while stepping; trees and DAGs are
+  drawn in layers.
+* A trace sends only what changed per step (heap nodes, and runs of
+  unchanged frames) and re-encodes only the running frame: 5000 steps by
+  default (was 1000), and a 1000-deep recursion traces in about 1 s and
+  0.4 MB instead of stopping at the size limit.
+
+### Fixed
+* A set of `(r, c)` cells was drawn as a function graph; the number line
+  showed counters next to every drawing; a trie showed only its root.
+* A trace that lowered the recursion limit left the kernel at that limit.
+* From a review of the visualizer (57 confirmed findings):
+  * Trace: suspended frames showed old values of `nonlocal` variables, a
+    list filled through `out.append` passed as a callback stayed empty, a
+    caller's comprehension variable or walrus was a step behind; generator
+    calls were merged (shared ids) and ended at their first yield; a call
+    that raised read "return None"; `yield from` showed red StopIteration
+    lines; a `key=lambda` called by `heapq` lost its callers; a 500-deep
+    recursion stopped at the size limit (stacks are now sent as runs).
+  * Player: the slider could not be dragged; arrow keys stopped after
+    clicking a button or a code line; a wide recursion tree slid back and
+    forth and lost the running call; every step reset the code scroll;
+    a failed live re-trace lost the step; the play button stayed ⏸ at the
+    end; ↑ at module level jumped to the end; Animate could not be turned
+    on with "reduce motion".
+  * Line values: read callers' locals, wrapped `a[j]` with `j = -1`, were
+    wrong for long NumPy arrays and emoji strings, showed the outer `j` for
+    `[a[j] for j in …]`; strings are now quoted (`'0'`).
+  * Recursion tree: "✗ IndexError" for calls that raised, no "→ None",
+    `insert(8, 3)` and `Node(3)` instead of type names, past 300 calls the
+    calls around the current step are kept and the rest folded into "…";
+    two lambdas are no longer recursion.
+  * Drawings: Kruskal's `(w, u, v)` edges, grid graphs keyed by `(r, c)`,
+    directed edge lists (Bellman-Ford) with both directions' weights,
+    `adj = [[] for _ in range(n)]` and dicts of lists that are not graphs
+    (a value → indices map is a table); 2-column DP tables and int pairs
+    no longer open as a line chart; mazes as lists of strings are grids;
+    containers in fields (`self.heap`, `self.parent`) get their own card;
+    a parameter that shadows the module's `root` no longer hides the rest
+    of the tree; pointers at `s[i-1]`, `dp[a-c]`; the solid DP cell is the
+    one on the line about to run; `enumerate` indexes are pointers;
+    union-find with negative sizes; long vertex names stay apart; `visited`
+    and `order` lists draw as cells; BFS keeps no stale current edge after
+    its loop; the heap practice cell sifts by hand so the swaps animate;
+    linked-list reversal slides nodes between the lists.
+
 ## Unreleased — practising ML
 
 ### Added

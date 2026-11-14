@@ -5,7 +5,7 @@
  */
 import { h } from '../dom';
 import { Encoded, Heap, numeric } from '../format';
-import { sameEncoded, shortScalar } from './common';
+import { cellText, sameEncoded } from './common';
 import { MatrixMarks } from './pointers';
 import { CellMarks } from './shapes';
 
@@ -59,7 +59,8 @@ export function renderMatrix(o: MatrixOpts): HTMLElement {
         changed ? 'changed' : '',
         ...(held ?? []),
       ].join(' ');
-      const td = h('td', { class: cls }, v === undefined ? '' : shortScalar(v, o.heap));
+      // grid[r][c] == 1 never holds for the str '1': quoted, the cell says why.
+      const td = h('td', { class: cls }, v === undefined ? '' : cellText(v, o.heap));
       if (n !== undefined && Number.isFinite(n) && hi > lo) {
         td.style.setProperty('--heat', String((n - lo) / (hi - lo)));
         td.classList.add('heat');
@@ -71,7 +72,8 @@ export function renderMatrix(o: MatrixOpts): HTMLElement {
   const parts: string[] = [];
   if (marks.row || marks.col) parts.push(`highlight: ${[marks.row, marks.col].filter((p) => p).map((p) => `${p!.name}=${p!.index}`).join(' ')}`);
   for (const p of marks.probes) parts.push(`${p.names[0]},${p.names[1]} = ${p.r},${p.c} (dashed)`);
-  for (const l of o.cells?.legend ?? []) parts.push(`${l.name} ${LEGEND[l.cls]}`);
+  // A cut visited set leaves visited cells blank: they are not unvisited.
+  for (const l of o.cells?.legend ?? []) parts.push(`${l.name} ${LEGEND[l.cls]}${l.total !== undefined ? ` (${l.shown} of ${l.total} shown)` : ''}`);
   const caption = parts.length ? h('div', { class: 'muted' }, parts.join(' · ')) : null;
   return h('div', { class: 'matrix-wrap' }, table, caption);
 }

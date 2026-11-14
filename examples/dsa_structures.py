@@ -57,14 +57,47 @@ node = root
 while node and node.val != 7:
     node = node.left if 7 < node.val else node.right
 
-# %% 4. Binary heap with heapq — watch values sift up and down
-import heapq
-
+# %% 4. Binary heap — watch values sift up and down
+# Written out by hand: heapq.heappush / heappop run in C, all in one step,
+# so there would be no swaps to watch. Each swap here is a step.
 heap = []
+
+
+def heap_push(x):
+    heap.append(x)                 # a new leaf ...
+    i = len(heap) - 1
+    while i > 0:                   # ... sifts up while it is smaller than its parent
+        parent = (i - 1) // 2
+        if heap[parent] <= heap[i]:
+            break
+        heap[i], heap[parent] = heap[parent], heap[i]
+        i = parent
+
+
+def heap_pop():
+    top = heap[0]
+    if len(heap) == 1:
+        return heap.pop()
+    heap[0] = heap.pop()           # the last leaf moves to the root ...
+    i = 0
+    while True:                    # ... and sifts down below its smaller child
+        left, right = 2 * i + 1, 2 * i + 2
+        small = i
+        if left < len(heap) and heap[left] < heap[small]:
+            small = left
+        if right < len(heap) and heap[right] < heap[small]:
+            small = right
+        if small == i:
+            break
+        heap[i], heap[small] = heap[small], heap[i]
+        i = small
+    return top
+
+
 for x in [5, 3, 8, 1, 9, 2]:
-    heapq.heappush(heap, x)
-smallest = [heapq.heappop(heap) for _ in range(3)]
-print(smallest, heap)
+    heap_push(x)
+smallest = [heap_pop() for _ in range(3)]
+print(smallest, heap)   # the same result as heapq: [1, 2, 3] [5, 9, 8]
 
 # %% 5. Trie — words that share a prefix share a path
 class TrieNode:

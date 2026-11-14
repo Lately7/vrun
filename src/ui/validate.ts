@@ -13,6 +13,7 @@ export const WEBVIEW_COMMANDS = [
   'runFile',
   'toggleLive',
   'visualize',
+  'visualizeFile',
   'toggleLiveVisualize',
   'showLog',
   'editInput',
@@ -29,6 +30,8 @@ export const WEBVIEW_COMMAND_IDS: Record<WebviewCommand, string> = {
   runFile: 'vrun.runFile',
   toggleLive: 'vrun.toggleLiveMode',
   visualize: 'vrun.visualize',
+  // The whole document: what "trace from the top of the file" buttons send.
+  visualizeFile: 'vrun.visualizeFile',
   toggleLiveVisualize: 'vrun.toggleLiveVisualize',
   showLog: 'vrun.showLog',
   editInput: 'vrun.editInput',

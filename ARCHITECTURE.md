@@ -32,8 +32,10 @@
 1. `KernelClient.start()` resolves the interpreter (setting `vrun.pythonPath`
    → Python extension's active interpreter → `python` on PATH) and spawns
    `python -u <ext>/python/launcher.py` with `shell: false`, an argument array,
-   `cwd` = workspace folder, and env additions `PYTHONUNBUFFERED=1`,
-   `PYTHONIOENCODING=utf-8`, `MPLBACKEND=Agg`.
+   `cwd` = the active file's folder (else the workspace folder), and env
+   additions `PYTHONUNBUFFERED=1`, `PYTHONIOENCODING=utf-8`, `PYTHONUTF8=1`
+   (UTF-8 mode: `open()` reads the UTF-8 files VS Code saves, whatever the
+   Windows code page), `MPLBACKEND=Agg`.
 2. The worker duplicates fd 0/1 for the protocol, then points fd 0 at
    `os.devnull` and fd 1 at fd 2. Native (C-level) writes to stdout therefore
    go to stderr (shown as the kernel log) and can never corrupt the protocol.
@@ -117,6 +119,30 @@ lineOffset, mode, execId}) → worker queue → ast.parse → (live: safety chec
   loads run once and are later restored from a snapshot copy.
 * **Program input**: the host sends the text of `<script>.in` as `stdin` with
   `execute`/`trace`; `input()` and `sys.stdin` read it.
+* **Before each run** (`worker._prepare_run`, one queue on the main thread, so
+  a process-wide `chdir` never happens in the middle of another run):
+  * **Working folder** (`workdir.py`): `execute` and `trace` carry `cwd`, the
+    folder of a saved file. If `os.getcwd()` is still the folder vrun chose
+    last time, the kernel moves there and replaces the `sys.path` entry it
+    added for the previous folder; a learner's own `os.chdir` is kept. A
+    top-level module of the learner that the new folder has its own copy of
+    (`utils.py` per lesson) is set aside and swapped (`reloader.follow_folder`).
+  * **Reload** (`reloader.py`, manual runs and traces only): the learner's own
+    modules (outside the standard library, site-packages and vrun) whose file
+    changed since import are reloaded in dependency order from their own
+    folder; names that point to old functions or classes are rebound, and a
+    class with a plain `type` metaclass keeps its identity and takes the new
+    body. A failed reload restores the old module.
+  * **Shadowed built-ins** (`shadows.py`): a built-in name another file bound
+    in the shared namespace is removed before a run of a different file that
+    does not bind it itself.
+  * Each step adds a line to `result.notes` when it changes something; notes of
+    a run the host does not show (blocked Live run) wait for the next result.
+* **Trained state** (`livestate.TrainedNames`): manual runs record names whose
+  objects a training statement built or filled (models, fitted estimators,
+  optimizers, histories, by weak reference or id); Live stops before a
+  statement that would rebind one, with a fallback check of the objects
+  themselves (fitted estimator, optimizer state, gradients, Keras history).
 * **Live Visualize** (DSA): same debounce/coalescing, but issues `trace`.
 * Every request carries an `execId`; each document has a monotonically
   increasing live generation. Responses for older generations are discarded.
@@ -163,28 +189,80 @@ The snapshots are compact:
   webview (`traceModel.ts`) rebuilds the heap of any step from checkpoints
   every 64 steps.
 * **Frames:** a suspended caller cannot change its own locals, so only the
-  top frame, the module frame and frames with closure cells are re-encoded
-  on each step; the others reuse their last encoding. Their objects can only
-  change through a frame that reaches them, which is encoded. This keeps a
-  1000-deep recursion linear (about 0.4 s instead of several seconds).
+  top frame, the module frame and frames that own closure cells are
+  re-encoded on each step; the others reuse their last encoding. A caller is
+  re-encoded once more when it calls (its line has not finished:
+  comprehension variables, `f(i := i + 1)`) and when the callee returns
+  (the callee may have changed its objects). Its objects can otherwise only
+  change through a frame that reaches them, which is encoded; a builtin
+  bound method (`out.append` passed as a callback) carries its owner
+  (`"of"`) so the list stays reachable. A closure's free variables are shown
+  in the running frame and in the frame that owns the cell, not in every
+  suspended copy. Library frames between traced ones (a `key=lambda` called
+  by `heapq`) are skipped, not the end of the stack.
+* **Stack runs** (`stackRuns: true`): in `stack`, a number n stands for n
+  frames that are the same objects as at those positions of the previous
+  step; the top frame is always sent. A 1000-deep recursion is about
+  0.4 MB and 1 s instead of stopping at the 6 MB limit at depth ~460.
 * **Calls:** every frame has a call id (`fid`) and, on its first step, its
-  parameter names (`params`). The webview builds the recursion tree, step
-  over / step out and per-line run counts from them.
+  parameter names (`params`), the id of its code object (`code`: two
+  lambdas are different functions, a recursive lambda is one) and its
+  qualified name (`qual`) when it differs. A frame's `return` step says how
+  it ended: `ret`, `ret` with `yield: true` (a generator suspended; it keeps
+  its id until it really ends), or `raised` (an exception left the frame,
+  from the opcode at `f_lasti`; `GeneratorExit` means closed). The
+  `StopIteration` that `yield from` / `await` raise internally is not
+  recorded. The webview builds the recursion tree, step over / step out and
+  per-line run counts from these.
 
-Hard limits: steps (default 5000), objects per snapshot, items per
-container, total bytes, wall time. Exceeding a limit stops the trace cleanly
-and the partial trace is still shown. The webview infers views from the data:
+* **Cells above** (`prelude.py`): `trace` may carry `prelude`, the text above
+  a traced `# %%` cell. Only safe top-level statements are kept (definitions,
+  imports of already-imported or standard modules, plain values, simple loops,
+  calls of helpers whose bodies pass the same whitelist), and only those the
+  cell needs; they run untraced under `<pylive-trace-prelude>`, output
+  discarded, within half the time budget, and functions defined there get a
+  time-only trace. The result's `notes` list what was used and what was
+  skipped and why.
+* **Endless loops**: the recorder compares each step's frames (top frame,
+  line, encoded locals, plus fingerprints of what a tag hides) with earlier
+  ones; the comparison restarts on any heap change, input, or a line that can
+  change state the trace does not show (iterators, random, time, untraced
+  calls). If the trace stops at a limit while a cycle repeats up to the end,
+  the result carries `loop: {first, repeat, line, values, prints?}`; the trace
+  never stops early because of it.
+* **Stopper**: a `sys.monitoring` LINE callback on the traced code objects
+  keeps raising the limit, so a bare `except:` cannot swallow it and loop on
+  untraced.
+
+Hard limits: steps (default 5000), 1000 objects per snapshot, 512 items per
+container (64×64 for 2-D arrays, 80 characters per string), total bytes, wall
+time. Nodes keep `len` next to the items sent, and a ref over the node cap is
+`{ref, missing: true}`, so the views say what was cut. Tuples of plain values
+are sent once, and unchanged containers and objects reuse their node
+(identity snapshots). Exceeding a limit stops the trace cleanly and the
+partial trace is still shown. The webview infers views from the data:
 
 | Data shape                              | View                          |
 |-----------------------------------------|-------------------------------|
 | list of numbers                         | bar array with index pointers (`i`, `j`, `lo`, `mid`, …) |
 | numeric scalars / set of numbers        | number line                   |
-| list of lists                           | matrix / DP table             |
-| dict of key → list/set of keys          | graph (adjacency), highlights `visited`/`queue`/`stack` |
-| objects with `left`/`right`             | binary tree                   |
+| list of lists                           | matrix / DP table; `(r, c)` sets coloured |
+| dict of key → list/set of keys, edge list | graph (adjacency), highlights `visited`/`queue`/`stack`, stable layout |
+| objects with `left`/`right`/`children`  | binary / n-ary tree, trie     |
+| nested dicts                            | trie                          |
+| `parent` list of indexes                | union-find forest             |
+| list with `None` named `tree`/`root`    | level-order binary tree       |
 | objects with `next`                     | linked list                   |
 | list named `heap` / used with `heapq`   | heap as tree                  |
 | list of (x, y) pairs, or `xs`/`ys`       | line chart (function graph)   |
+| string indexed by the code              | character cells               |
+
+Which names point where comes from the source (`webview/viz/sourceHints.ts`):
+a pointer is drawn on a sequence only when the code indexes that sequence
+with it, or it is a bound name (`lo`, `hi`, `left`, …) of a sequence the
+code scans, and only from the frame that holds the sequence. Views key
+their elements (`data-anim` within a card's `data-anim-scope`) and
+`webview/viz/animate.ts` animates from the previous step's layout (FLIP).
 
 `variables.inspect` returns the same structure description for persistent
 variables, so the Visualizer also works without tracing.

@@ -1,5 +1,5 @@
 /** Shared helpers for the SVG data-structure views. */
-import { Encoded, Heap, HeapNode, isRef, numeric } from '../format';
+import { Encoded, Heap, HeapNode, fmtPy, fmtScalar, isRef, numeric, pyStr } from '../format';
 
 /** Locals that look like index pointers into arrays. */
 const POINTER_NAME =
@@ -74,35 +74,148 @@ export function niceTicks(lo: number, hi: number, maxTicks = 10): number[] {
   return ticks;
 }
 
+const LABEL_FIELDS = ['val', 'value', 'key', 'data', 'item', 'name', 'v'];
+
 /** Display label for a tree/list node: its val/value/key/data field. */
 export function nodeLabel(n: HeapNode, heap: Heap): string {
   const fields = n.fields ?? [];
-  const pick = fields.find(([k]) => ['val', 'value', 'key', 'data', 'item', 'name', 'v'].includes(k));
+  const pick = fields.find(([k]) => LABEL_FIELDS.includes(k));
   if (!pick) return n.type ?? '?';
   const v = pick[1];
   if (isRef(v)) return n.type ?? '?';
   return shortScalar(v, heap);
 }
 
-export function shortScalar(v: Encoded, heap?: Heap): string {
-  if (typeof v === 'string') return v.length > 8 ? v.slice(0, 7) + '…' : v;
+/** The text of a str value (long strings arrive as a tagged prefix). */
+export function strValue(v: Encoded | undefined): string | undefined {
+  if (typeof v === 'string') return v;
+  if (v && typeof v === 'object' && !isRef(v) && v.$t === 'str' && v.v !== undefined) return v.v;
+  return undefined;
+}
+
+const NUMBERISH = /^[-+]?(\d[\d_]*\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
+
+/**
+ * A str that, drawn bare, reads as another type or as nothing: '10' (input()
+ * not converted to int), '', ' ', 'None', 'abba\n'. Such cells are quoted.
+ */
+export function ambiguousStr(s: string): boolean {
+  return s.trim() === '' || s !== s.trim() || /[\n\r\t]/.test(s) || NUMBERISH.test(s) || /^(None|True|False|inf|-inf|nan)$/.test(s);
+}
+
+/**
+ * A value as a short cell label. Containers of work items are read by what
+ * they hold: a stack of TreeNodes shows the nodes' values, a heap of
+ * (dist, i, node) shows '(3,0,7)', a BFS queue '((2,3),4)', a hash bucket
+ * '[1,10]'. Tuples and lists of up to 3 items are drawn recursively, two
+ * levels deep; a node inside one shows its label. `depth` is the nesting
+ * level of `v` itself.
+ */
+export function shortScalar(v: Encoded, heap?: Heap, depth = 0): string {
+  if (typeof v === 'string') {
+    const t = v.length > 8 ? v.slice(0, 7) + '…' : v;
+    // Inside a tuple, (1, '1') must not read as (1, 1).
+    return depth > 0 && ambiguousStr(v) ? pyStr(t) : t;
+  }
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(4)));
   if (v === null) return 'None';
   if (typeof v === 'boolean') return v ? 'T' : 'F';
   if (isRef(v)) {
     const n = heap?.[String(v.ref)];
     if (!n) return '…';
-    // Small tuples are values to a learner, e.g. (dist, node) in a priority
-    // queue or (row, col) in a BFS queue: show their contents.
-    if (n.kind === 'tuple' && n.items && n.items.length <= 3 && n.items.every((x) => !isRef(x))) {
-      return '(' + n.items.map((x) => shortScalar(x)).join(',') + ')';
+    if (n.kind === 'object') return nodeLabel(n, heap!);
+    const whole = n.items !== undefined && (n.len ?? n.items.length) === n.items.length;
+    if ((n.kind === 'tuple' || n.kind === 'list') && whole && depth < 2 && n.items!.length <= 3) {
+      const inner = n.items!.map((x) => shortScalar(x, heap, depth + 1));
+      return n.kind === 'tuple' ? `(${inner.join(',')}${inner.length === 1 ? ',' : ''})` : `[${inner.join(',')}]`;
     }
-    return n.kind === 'object' ? n.type ?? 'obj' : `${n.kind}`;
+    return n.len !== undefined && n.kind !== 'ndarray' ? `${n.kind}[${n.len}]` : n.kind;
   }
   if (v.$t === 'inf') return '∞';
   if (v.$t === '-inf') return '-∞';
   if (v.$t === 'nan') return 'NaN';
-  return v.v ? v.v.slice(0, 8) : v.$t;
+  // A 63-digit int cut to 8 characters must not read as a smaller number.
+  if (v.v) return v.v.length > 8 ? v.v.slice(0, 7) + '…' : v.v;
+  return v.$t;
+}
+
+/** shortScalar, with a str that would read as another type quoted: '10', '', 'None'. */
+export function cellText(v: Encoded, heap?: Heap): string {
+  const t = strValue(v);
+  return t !== undefined && ambiguousStr(t) ? pyStr(t.length > 8 ? t.slice(0, 7) + '…' : t) : shortScalar(v, heap);
+}
+
+/**
+ * A value as Python would print it, for tooltips: the whole tuple, a node as
+ * TreeNode(val=5), strings quoted.
+ */
+export function pyText(v: Encoded, heap?: Heap, depth = 0): string {
+  if (!isRef(v)) return fmtPy(v, heap);
+  const n = heap?.[String(v.ref)];
+  if (!n) return '… (not shown: too many objects)';
+  if (n.kind === 'object') {
+    const pick = (n.fields ?? []).find(([k]) => LABEL_FIELDS.includes(k));
+    return pick && !isRef(pick[1]) ? `${n.type ?? 'object'}(${pick[0]}=${fmtPy(pick[1])})` : `<${n.type ?? 'object'} object>`;
+  }
+  if ((n.kind === 'tuple' || n.kind === 'list') && n.items && depth < 3) {
+    const shown = n.items.slice(0, 6).map((x) => pyText(x, heap, depth + 1));
+    const cut = (n.len ?? n.items.length) > shown.length;
+    if (n.kind === 'list') return `[${shown.join(', ')}${cut ? ', …' : ''}]`;
+    return `(${shown.join(', ')}${cut ? ', …' : shown.length === 1 ? ',' : ''})`;
+  }
+  return fmtScalar(v, heap);
+}
+
+/**
+ * What every item of a container is, when they agree: 'str' ('10' is not
+ * 10), or one class (a stack of TreeNode, whose cells show values).
+ */
+export function itemType(items: Encoded[], heap: Heap): string | undefined {
+  if (!items.length) return undefined;
+  if (items.every((x) => strValue(x) !== undefined)) return 'str';
+  const types = new Set(items.map((x) => {
+    const n = isRef(x) ? heap[String(x.ref)] : undefined;
+    return n?.kind === 'object' ? n.type ?? '' : '';
+  }));
+  const [t] = types;
+  return types.size === 1 && t ? t : undefined;
+}
+
+/**
+ * Heap ids of the objects held by the work containers among `vars`
+ * (stack, queue, frontier, heap, pq ...), also inside small tuples such as
+ * (dist, i, node): the nodes still waiting to be processed, each with the
+ * name of the container holding it.
+ */
+export function memberRefs(vars: Var[], heap: Heap, re: RegExp): Map<number, string> {
+  const out = new Map<number, string>();
+  const add = (v: Encoded, depth: number, name: string) => {
+    if (!isRef(v)) return;
+    const n = heap[String(v.ref)];
+    if (n?.kind === 'object') {
+      if (!out.has(v.ref)) out.set(v.ref, name);
+    } else if (depth < 2 && (n?.kind === 'tuple' || n?.kind === 'list') && n.items && n.items.length <= 4) for (const x of n.items) add(x, depth + 1, name);
+  };
+  const scan = (name: string, value: Encoded, label = name) => {
+    if (!re.test(name)) return;
+    const n = node(heap, value);
+    if (!n || n.kind === 'object' || n.kind === 'dict') return;
+    for (const it of n.items ?? []) add(it, 1, label);
+  };
+  for (const v of vars) {
+    scan(v.name, v.value);
+    // BSTIterator keeps its stack in self.stack.
+    const o = node(heap, v.value);
+    if (o?.kind === 'object') for (const [f, val] of o.fields ?? []) scan(f, val, `${v.name}.${f}`);
+  }
+  return out;
+}
+
+/** Like shortScalar, but a string is kept whole: an identity (a graph vertex), not a cell label. */
+export function idScalar(v: Encoded, heap?: Heap): string {
+  if (typeof v === 'string') return v;
+  if (v && typeof v === 'object' && !isRef(v) && v.$t === 'str' && v.v !== undefined) return v.v;
+  return shortScalar(v, heap);
 }
 
 /** Refs (by heap id) held by variables, used to label tree / list nodes. */
@@ -132,7 +245,8 @@ export interface KeyMemo {
  * Animation keys (data-anim) for the items of an array, relative to the
  * last drawing of the same array. When the step only moved values around
  * (a swap, a sort pass: the same multiset) each value keeps its key and
- * the animator slides it to its new place; otherwise keys stay with their
+ * the animator slides it to its new place; after a single push or pop the
+ * surviving values keep theirs too; otherwise keys stay with their
  * positions, so an in-place change flashes. Carrying keys over (instead of
  * switching between value keys and index keys) keeps a no-op step after
  * an in-place change from re-fading the whole array.
@@ -158,6 +272,30 @@ export function itemKeys(items: Encoded[], last: KeyMemo | undefined): KeyMemo {
       keys.push(k);
       used.add(k);
     }
+    return { sig, keys };
+  }
+  if (last && Math.abs(last.sig.length - sig.length) === 1) {
+    // One push or pop (heappush appends and sifts in one step): values that
+    // survive keep their key and slide; an equal value prefers its own index.
+    const out: Array<string | undefined> = sig.map((x, i) => (last.sig[i] === x ? last.keys[i] : undefined));
+    const taken = new Set(out.filter((k): k is string => k !== undefined));
+    sig.forEach((x, i) => {
+      if (out[i] !== undefined) return;
+      let best = -1;
+      last.sig.forEach((y, j) => {
+        if (y === x && !taken.has(last.keys[j]) && (best < 0 || Math.abs(j - i) < Math.abs(best - i))) best = j;
+      });
+      if (best >= 0) {
+        out[i] = last.keys[best];
+        taken.add(last.keys[best]);
+      }
+    });
+    for (const k of taken) used.add(k);
+    out.forEach((k, i) => {
+      const key = k ?? fresh(i);
+      keys.push(key);
+      used.add(key);
+    });
     return { sig, keys };
   }
   sig.forEach((_, i) => {

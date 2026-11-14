@@ -27,10 +27,14 @@ export interface TNode {
   /** Children are the [left, right] slots, null for a missing child. */
   binary?: boolean;
   children: Array<TNode | null>;
+  /** Children the kernel did not send (its object cap): they exist, so the node must not look like a leaf. */
+  cut?: number;
 }
 
 const MAX_NODES = 255;
-const MAX_DEPTH = 40;
+// As deep as the node cap: a degenerate BST (sorted inserts) is a chain,
+// and cutting it at a fixed depth hid the nodes cur / tail point at.
+const MAX_DEPTH = MAX_NODES;
 const LABEL_FIELDS = ['val', 'value', 'key', 'data', 'item', 'name', 'v', 'char', 'ch', 'letter'];
 const CHILD_FIELDS = ['children', 'kids', 'child', 'links'];
 
@@ -82,10 +86,12 @@ export function objectTree(rootRef: number, heap: Heap): TNode | undefined {
     if (!n || n.kind !== 'object') return undefined;
     seen.add(ref);
     const t: TNode = { key: `n:${ref}`, label: treeLabel(n, heap), edge, end: isEnd(n), ref, children: [] };
+    const notSent = (c: Encoded | undefined) => isRef(c) && !heap[String(c.ref)];
     if (hasField(n, 'left') || hasField(n, 'right')) {
       t.binary = true;
       for (const side of ['left', 'right']) {
         const c = field(n, side);
+        if (notSent(c)) t.cut = (t.cut ?? 0) + 1;
         t.children.push(isRef(c) ? build(c.ref, depth + 1) ?? null : null);
       }
       return t;
@@ -95,6 +101,7 @@ export function objectTree(rootRef: number, heap: Heap): TNode | undefined {
     const kids = isRef(holder) ? heap[String(holder.ref)] : undefined;
     if (kids?.kind === 'dict') {
       for (const [k, v] of kids.entries ?? []) if (isRef(v)) {
+        if (notSent(v)) t.cut = (t.cut ?? 0) + 1;
         const c = build(v.ref, depth + 1, shortScalar(k, heap));
         if (c) t.children.push(c);
       }
@@ -103,10 +110,12 @@ export function objectTree(rootRef: number, heap: Heap): TNode | undefined {
       const alpha = kids.items.length === 26;
       kids.items.forEach((v, i) => {
         if (!isRef(v)) return;
+        if (notSent(v)) t.cut = (t.cut ?? 0) + 1;
         const c = build(v.ref, depth + 1, alpha ? String.fromCharCode(97 + i) : undefined);
         if (c) t.children.push(c);
       });
     }
+    if (isRef(holder) && !kids) t.cut = (t.cut ?? 0) + 1;
     return t;
   };
   return build(rootRef, 0);
@@ -133,6 +142,36 @@ export function dictTrie(rootRef: number, heap: Heap): TNode | undefined {
     return t;
   };
   return build(rootRef, 0);
+}
+
+/** Heap ids of the nodes a tree drawing holds. */
+export function treeRefs(t: TNode | undefined, out = new Set<number>()): Set<number> {
+  const stack = t ? [t] : [];
+  while (stack.length) {
+    const n = stack.pop()!;
+    if (n.ref !== undefined) out.add(n.ref);
+    for (const c of n.children) if (c) stack.push(c);
+  }
+  return out;
+}
+
+export const MAX_LIST_NODES = 60;
+
+/** Nodes of a linked list from its head, in order, and where a cycle closes (the first node met twice). */
+export function linkedOrder(headRef: number, heap: Heap): { order: number[]; cycleTo?: number } {
+  const order: number[] = [];
+  const seen = new Set<number>();
+  let cur: number | undefined = headRef;
+  while (cur !== undefined && order.length < MAX_LIST_NODES) {
+    if (seen.has(cur)) return { order, cycleTo: cur };
+    const n: HeapNode | null | undefined = heap[String(cur)];
+    if (!n || n.kind !== 'object') break;
+    seen.add(cur);
+    order.push(cur);
+    const nx = field(n, 'next');
+    cur = isRef(nx) ? nx.ref : undefined;
+  }
+  return { order };
 }
 
 /** Level-order list: children of i at 2i+1 and 2i+2; a None hides its subtree. */

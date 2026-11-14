@@ -30,7 +30,11 @@ IGNORED = {
     "matplotlib": "figures are shown automatically",
     "load_ext": "extensions are not needed",
     "reload_ext": "extensions are not needed",
-    "autoreload": "re-run the cell that imports your module after editing it",
+    # Re-running the import line does nothing (the module stays in
+    # sys.modules); the worker reloads edited modules itself before a run,
+    # except one whose import does something a reload must not repeat.
+    "autoreload": ("not needed: vrun reloads the .py modules you edited before each Run Cell and Visualize "
+                   "(the run's notes say when it could not)"),
     "config": "notebook configuration does not apply",
     "precision": "use np.set_printoptions / pd.set_option instead",
     "pylab": "import numpy and matplotlib.pyplot yourself",

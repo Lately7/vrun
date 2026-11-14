@@ -32,7 +32,9 @@ import weakref
 from dataclasses import dataclass
 from typing import Any, BinaryIO, Callable
 
-from . import children, dataframe, executor, heap, images, inspector, magics, outbuf, safety, series, tracer, warnfold
+from . import (children, dataframe, executor, heap, images, inspector, livestate, magics, outbuf, reloader, safety,
+               series, shadows, tracer, warnfold, workdir)
+from .livestate import first_state_reset as _first_state_reset, target_names as _target_names
 from .programinput import NO_INPUT_HINT, ProgramInput
 from .serialize import type_module, type_name, type_qualname
 
@@ -301,6 +303,17 @@ class Worker:
         self.current_loaded_now: list[dict[str, Any]] = []
         self.timeout_generation = 0
         self.shutting_down = False
+        # Created before any user code runs: the startup folder and its
+        # sys.path entry are still the ones launcher.py set.
+        self.workdir = workdir.WorkingFolder()
+        self.modules = reloader.ModuleReloader()
+        self.modules.add_folder(self.workdir.chosen)
+        self.trained = livestate.TrainedNames()
+        self.leftovers = shadows.BuiltinLeftovers()
+        # Notes of a run that stopped before running (Live blocked it, or it
+        # asks to confirm training): the host shows no notes for those, and
+        # the folder change or reload they report already happened.
+        self.carried_notes: list[str] = []
 
     # -- setup -------------------------------------------------------------
     def install_streams(self) -> None:
@@ -612,6 +625,7 @@ class Worker:
         mode = p.get("mode", "manual")
         if mode not in ("manual", "live"):
             raise RequestError("bad_request", "mode must be 'manual' or 'live'")
+        folder = self._folder_param(p)
         self.current_exec_id = p.get("execId")
         self.exec_seq += 1
         stdin = self._stdin_param(p)
@@ -628,14 +642,18 @@ class Worker:
         if mode == "live":
             live_budget = _num(p.get("timeoutMs"), 5000, 100, 600_000) / 1000
 
+        # Before the analysis: it must see the module code that will run (a
+        # helper edited to train asks for confirmation on the first run).
+        notes = self.carried_notes + self._prepare_run(mode, filename, folder)
+        self.carried_notes = []
         source_code = code
         try:
             code, magic_notes = magics.rewrite(code)
         except magics.MagicError as exc:
             err = SyntaxError(str(exc), (filename, exc.line + line_offset, 1, None))
-            return {"status": "error", "error": executor.format_syntax_error(err),
-                    "executionCount": self.execution_count, "figures": [],
-                    "skippedLoads": [], "loadedNow": [], "loadCache": len(self.load_cache)}
+            return _with_notes({"status": "error", "error": executor.format_syntax_error(err),
+                                "executionCount": self.execution_count, "figures": [],
+                                "skippedLoads": [], "loadedNow": [], "loadCache": len(self.load_cache)}, notes)
         analysis = safety.analyze_source(code, self._cheap_preprocessors(), self._risky_calls(),
                                          self._torch_modules())
         _add_file_lines(analysis, line_offset)
@@ -643,6 +661,7 @@ class Worker:
         live_ok = analysis["liveSafe"] or (stdin is not None and analysis.get("liveSafeWithInput"))
         stop_index: int | None = None
         stopped_at = None
+        whole = False
         if mode == "live" and not live_ok:
             # Run the safe beginning of the cell (load, preprocess, explore)
             # and stop before the first statement that trains or writes:
@@ -661,14 +680,23 @@ class Worker:
                         "message": f"re-running this would reset '{name}', which line "
                                    f"{stopped_at['line']} uses ({stopped_at['message']})",
                     }
-            if whole or stop_index is None or stop_index == 0:
-                blocked = {"status": "blocked", "analysis": analysis,
-                           "executionCount": self.execution_count,
-                           "skippedLoads": [], "loadedNow": [],
-                           "loadCache": len(self.load_cache)}
-                if stopped_at is not None:
-                    blocked["stoppedAt"] = stopped_at
-                return blocked
+        if mode == "live" and not whole:
+            # A cell with no training of its own (`model = MLP()`, `history =
+            # {...}`) must not replace what an earlier Run Cell trained either.
+            guard = self.trained.first_replacement(ast.parse(code).body, stop_index, self.ns, filename)
+            if guard is not None and (stop_index is None or guard[0] < stop_index):
+                stop_index, message = guard
+                stopped_at = {"line": int(statement_analysis[stop_index]["line"]) + line_offset,
+                              "category": "trained", "message": message}
+        if mode == "live" and (whole or stop_index == 0 or (not live_ok and stop_index is None)):
+            blocked = {"status": "blocked", "analysis": analysis,
+                       "executionCount": self.execution_count,
+                       "skippedLoads": [], "loadedNow": [],
+                       "loadCache": len(self.load_cache)}
+            if stopped_at is not None:
+                blocked["stoppedAt"] = stopped_at
+            self._carry(notes)
+            return blocked
         code_hash = hashlib.sha256(code.encode("utf-8", "surrogatepass")).hexdigest()
         # Ask before repeating training only when the last run took long
         # enough to matter (instant fits asked every time).
@@ -676,6 +704,7 @@ class Worker:
         last = self.ml_hashes.get(code_hash)
         if mode == "manual" and analysis.get("training") and last is not None \
                 and last >= confirm_after and not p.get("force"):
+            self._carry(notes)
             return {"status": "needs_confirmation", "analysis": analysis,
                     "executionCount": self.execution_count,
                     "lastElapsedMs": round(last * 1000, 2),
@@ -687,13 +716,15 @@ class Worker:
         try:
             statements = executor.compile_statements(code, filename, line_offset)
         except SyntaxError as exc:
-            return {"status": "error", "error": executor.format_syntax_error(exc),
-                    "executionCount": self.execution_count, "figures": [],
-                    "skippedLoads": [], "loadedNow": [],
-                    "loadCache": len(self.load_cache)}
+            return _with_notes({"status": "error", "error": executor.format_syntax_error(exc),
+                                "executionCount": self.execution_count, "figures": [],
+                                "skippedLoads": [], "loadedNow": [],
+                                "loadCache": len(self.load_cache)}, notes)
 
         if len(statement_analysis) != len(statements):
             raise RuntimeError("safety and compiler statement counts differ")
+        nodes = [s.node for s in statements]
+        notes += self._remove_leftovers(filename, nodes)
         if stop_index is not None:
             statements = statements[:stop_index]
             statement_analysis = statement_analysis[:stop_index]
@@ -705,6 +736,10 @@ class Worker:
         error = None
         remaining = live_budget
         import_seconds = 0.0  # imports do not make training "slow"
+        ran: list[tuple[executor.CompiledStatement, dict[str, Any]]] = []
+        sizes: dict[int, dict[str, tuple[int, int]]] = {}  # index in ran -> TrainedNames.sizes
+        builtins_before = self.leftovers.snapshot(self.ns)
+        started_wall = time.time()  # file mtimes are wall-clock
         try:
             for statement, statement_info in zip(statements, statement_analysis):
                 is_load = bool(statement_info["load"])  # type: ignore[index]
@@ -752,6 +787,11 @@ class Worker:
                 # Checked per statement: pandas is usually imported by the
                 # first statement and printed by a later one in the same run.
                 executor.apply_pandas_display()
+                if mode == "manual" and livestate.trains(statement_info["findings"]):  # type: ignore[arg-type]
+                    # A helper may fill a history out of sight
+                    # (train_epoch(model, opt, losses)): sizes before, for after.
+                    sizes[len(ran)] = self.trained.sizes(statement.node, self.ns)
+                ran.append((statement, statement_info))
                 try:
                     if untearable:
                         with self.cur_lock:
@@ -799,6 +839,10 @@ class Worker:
                      "frames": [], "userFrame": None}
         except BaseException as exc:  # noqa: BLE001
             error = executor.format_exception(exc, {filename})
+        finally:
+            # Also after an error or an interrupt: training stopped after 5
+            # epochs still trained the model.
+            self._after_run(mode, filename, nodes, ran, builtins_before, started_wall, sizes)
         elapsed = time.perf_counter() - started
         if value is not None and error is None:
             # A Figure is drawn, plt.plot(...)'s Line2D list is noise, and a
@@ -829,11 +873,70 @@ class Worker:
             self.ml_hashes[code_hash] = max(0.0, elapsed - import_seconds)
         if stopped_at is not None:
             result["stoppedAt"] = stopped_at
-        if magic_notes:
-            result["notes"] = magic_notes
+        if notes or magic_notes:
+            result["notes"] = notes + magic_notes
         if analysis["findings"]:
             result["analysis"] = analysis
         return result
+
+    def _prepare_run(self, mode: str, filename: str, folder: str | None) -> list[str]:
+        """Working folder and edited modules, before a run is analysed.
+        Returns notes. Each step on its own: a failing os.chdir must not
+        also skip the reload."""
+        notes: list[str] = []
+        moved = False
+        try:
+            moved, note = self.workdir.apply(folder, filename)
+            if note:
+                notes.append(note)
+        except Exception as exc:  # noqa: BLE001 - a helper's bug must not block every run
+            _log(f"working folder change failed: {type(exc).__name__}: {exc}")
+        try:
+            self.modules.add_folder(folder)
+            if os.path.isabs(filename):
+                self.modules.add_folder(os.path.dirname(filename))
+            if moved and folder is not None:
+                notes += self.modules.follow_folder(folder, self.ns)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"module folder update failed: {type(exc).__name__}: {exc}")
+        try:
+            # Reloading runs the module's code: never on Live's keystrokes.
+            notes += self.modules.reload_changed(self.ns) if mode == "manual" else self.modules.changed_notes()
+        except Exception as exc:  # noqa: BLE001
+            _log(f"module reload failed: {type(exc).__name__}: {exc}")
+        return notes
+
+    def _remove_leftovers(self, filename: str, nodes: list[ast.stmt]) -> list[str]:
+        """Built-in names another file left, just before user code runs."""
+        try:
+            return self.leftovers.remove(self.ns, filename, nodes)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"leftover removal failed: {type(exc).__name__}: {exc}")
+            return []
+
+    def _carry(self, notes: list[str]) -> None:
+        for n in notes:
+            if n not in self.carried_notes and len(self.carried_notes) < 20:
+                self.carried_notes.append(n)
+
+    def _after_run(self, mode: str, filename: str, nodes: list[ast.stmt],
+                   ran: list[tuple[executor.CompiledStatement, dict[str, Any]]],
+                   builtins_before: dict[str, object], started_wall: float,
+                   sizes: dict[int, dict[str, tuple[int, int]]]) -> None:
+        try:
+            self.workdir.ran(filename)
+            self.leftovers.remember(self.ns, filename, nodes, builtins_before)
+            self.modules.scan(started_wall)  # import-time stamps of modules this run imported
+            self.trained.prune(self.ns)
+            if mode != "manual":
+                return
+            training = [(i, s) for i, (s, info) in enumerate(ran) if livestate.trains(info["findings"])]
+            if training:
+                risky = self._risky_calls()
+                for i, s in training:
+                    self.trained.record(s.node, s.line, filename, self.ns, risky, sizes.get(i))
+        except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a finished run
+            _log(f"run bookkeeping failed: {type(exc).__name__}: {exc}")
 
     def _end_untearable(self) -> None:
         with self.cur_lock:
@@ -961,23 +1064,45 @@ class Worker:
 
     def h_trace(self, p: dict[str, Any]) -> dict[str, Any]:
         code = _str(p.get("code"), "code", 200_000)
+        folder = self._folder_param(p)
+        prelude = p.get("prelude")
+        prelude = None if prelude is None else _str(prelude, "prelude", 2_000_000)
         self.current_exec_id = p.get("execId")
         self.exec_seq += 1
         stdin = self._stdin_param(p)
-        if p.get("mode") == "live":
+        live = p.get("mode") == "live"
+        if live:
             analysis = safety.analyze_source(code)
             # A trace starts from a fresh namespace, so loads would re-read on
             # every keystroke: only program input is allowed in live traces.
             only_input = all(f["category"] == "input" for f in analysis["findings"])  # type: ignore[union-attr, index]
             if not analysis["safe"] and not (stdin is not None and only_input):
                 return {"status": "blocked", "analysis": analysis}
-        result = tracer.run_trace(
-            code,
-            max_steps=int(_num(p.get("maxSteps"), 5000, 10, 50000)),
-            max_bytes=int(_num(p.get("maxBytes"), 6_000_000, 10_000, 7_000_000)),
-            max_seconds=_num(p.get("timeoutMs"), 15000, 100, 600_000) / 1000,
-            stdin=stdin,
-        )
+        # Same working-folder policy as execute, and the learner's edited
+        # modules: `from hinh_hoc import f` in the traced code finds the
+        # module in sys.modules, so a stale one would be traced.
+        notes = self._prepare_run("live" if live else "manual", "<trace>", folder)
+        extra: dict[str, Any] = {}
+        if prelude is not None:
+            extra["prelude"] = prelude  # C3: safe definitions from the cells above
+        started_wall = time.time()
+        try:
+            result = tracer.run_trace(
+                code,
+                max_steps=int(_num(p.get("maxSteps"), 5000, 10, 50000)),
+                max_bytes=int(_num(p.get("maxBytes"), 6_000_000, 10_000, 7_000_000)),
+                max_seconds=_num(p.get("timeoutMs"), 15000, 100, 600_000) / 1000,
+                stdin=stdin,
+                **extra,
+            )
+        finally:
+            try:
+                self.workdir.ran("<trace>")
+                self.modules.scan(started_wall)  # modules the traced code imported
+            except Exception as exc:  # noqa: BLE001
+                _log(f"module scan failed: {type(exc).__name__}: {exc}")
+        if notes:
+            result["notes"] = notes + [n for n in result.get("notes") or [] if type(n) is str]
         result["status"] = "ok"
         return result
 
@@ -985,6 +1110,12 @@ class Worker:
     def _stdin_param(p: dict[str, Any]) -> str | None:
         stdin = p.get("stdin")
         return None if stdin is None else _str(stdin, "stdin", 1_100_000)
+
+    @staticmethod
+    def _folder_param(p: dict[str, Any]) -> str | None:
+        """C1: the folder of the saved document being run (absent for untitled)."""
+        folder = p.get("cwd")
+        return None if folder is None else _str(folder, "cwd", 4096)
 
     def h_analyze(self, p: dict[str, Any]) -> dict[str, Any]:
         return safety.analyze_source(_str(p.get("code"), "code", 2_000_000), self._cheap_preprocessors(),
@@ -1066,17 +1197,6 @@ class Worker:
 
     def respond_error(self, req_id: Any, code: str, message: str) -> None:
         self.writer.send(_error(req_id, code, message))
-
-
-def _target_names(target: ast.expr) -> set[str]:
-    if isinstance(target, ast.Name):
-        return {target.id}
-    if isinstance(target, (ast.Tuple, ast.List)):
-        names: set[str] = set()
-        for item in target.elts:
-            names.update(_target_names(item))
-        return names
-    return set()
 
 
 _PLOTLY_DIR: str | None = None
@@ -1171,6 +1291,12 @@ def _add_file_lines(analysis: dict[str, Any], line_offset: int) -> None:
             f["fileLine"] = int(f.get("line") or 0) + line_offset
 
 
+def _with_notes(result: dict[str, Any], notes: list[str]) -> dict[str, Any]:
+    if notes:
+        result["notes"] = notes
+    return result
+
+
 def _first_unsafe(statements: list[dict[str, Any]], allowed: tuple[str, ...]) -> int | None:
     for i, st in enumerate(statements):
         if any(f["category"] not in allowed for f in st["findings"]):
@@ -1203,100 +1329,8 @@ def _function_codes(value: object) -> list[Any]:
     return codes
 
 
-_PLAIN_DATA = (int, float, complex, bool, str, bytes, type(None), range, list, dict, set, frozenset,
-               types.ModuleType, types.FunctionType)
-_MUTATING_METHODS = {
-    "append", "extend", "insert", "pop", "remove", "clear", "update", "add", "discard",
-    "setdefault", "popitem", "sort", "reverse", "appendleft", "extendleft", "popleft",
-    "fill", "resize", "put", "put_nowait",
-}
-
-
-def _is_plain_data(value: object) -> bool:
-    """Values that re-running their assignment recreates as they were
-    (data, arrays, frames). Models, optimizers and tensors are state that
-    training built."""
-    t = type(value)
-    if t in _PLAIN_DATA or heap.is_class(value):
-        return True
-    if t is tuple:
-        return len(value) <= 100 and all(_is_plain_data(v) for v in value)  # type: ignore[arg-type]
-    module = type_module(t)
-    return module in ("numpy", "collections") or module.startswith(("pandas.", "scipy.sparse"))
-
-
-def _base_name(node: ast.expr) -> str | None:
-    while isinstance(node, (ast.Attribute, ast.Subscript)):
-        node = node.value
-    return node.id if isinstance(node, ast.Name) else None
-
-
-def _mutated_names(statements: list[ast.stmt]) -> set[str]:
-    """Names whose value the statements change in place: `losses.append(x)`,
-    `history["loss"] += [x]`, `count += 1`, `w[0] = 1`."""
-    names: set[str] = set()
-    for s in statements:
-        for node in ast.walk(s):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                    and node.func.attr in _MUTATING_METHODS:
-                base = _base_name(node.func.value)
-            elif isinstance(node, ast.AugAssign):
-                base = _base_name(node.target)
-            elif isinstance(node, (ast.Assign, ast.Delete)):
-                for t in node.targets:
-                    if isinstance(t, (ast.Attribute, ast.Subscript)):
-                        b = _base_name(t)
-                        if b is not None:
-                            names.add(b)
-                continue
-            else:
-                continue
-            if base is not None:
-                names.add(base)
-    return names
-
-
-def _rebound_names(statement: ast.stmt) -> set[str]:
-    """Names a statement assigns, outside function and class bodies."""
-    names: set[str] = set()
-    stack: list[ast.AST] = [statement]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            continue
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                names |= _target_names(target)
-        elif isinstance(node, (ast.AnnAssign, ast.For, ast.AsyncFor, ast.NamedExpr)):
-            names |= _target_names(node.target)
-        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
-            names |= _target_names(node.optional_vars)
-        stack.extend(ast.iter_child_nodes(node))
-    return names
-
-
-def _first_state_reset(body: list[ast.stmt], stop: int, ns: dict[str, Any]) -> tuple[int, str] | None:
-    """First statement before `stop` that would replace an object the
-    skipped statements use: `model = LogisticRegression()` before
-    `model.fit(...)`. Running it live threw the trained model away."""
-    if stop > len(body):
-        return None
-    skipped = body[stop:]
-    used = {n.id for s in skipped for n in ast.walk(s)
-            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-    mutated = _mutated_names(skipped)
-    used |= mutated  # `count += 1` reads count too
-    for i in range(stop):
-        for name in sorted(_rebound_names(body[i]) & used):
-            # Data is recreated as it was, unless the skipped loop fills it
-            # (`losses = []` before `losses.append(loss)`).
-            if name in ns and (name in mutated or not _is_plain_data(ns[name])):
-                return i, name
-    return None
-
-
 def safety_type_is_cheap(t: type) -> bool:
-    return type_module(t).startswith("sklearn.") and type_qualname(t) in safety.CHEAP_PREPROCESSORS
+    return livestate.is_cheap_preprocessor(t)
 
 
 def _bound_names(statement: ast.stmt) -> set[str]:
@@ -1485,6 +1519,15 @@ def _num(v: Any, default: float, lo: float, hi: float) -> float:
 
 def _noop() -> None:
     pass
+
+
+def _log(text: str) -> None:
+    """A line in the kernel log (vrun: Show Kernel Log): fd 2 is the real
+    stderr, while sys.stderr shows in the learner's Output."""
+    try:
+        os.write(2, f"[vrun] {text}\n".encode("utf-8", "replace"))
+    except OSError:
+        pass
 
 
 def _drain_pending_interrupt() -> None:
